@@ -1,0 +1,37 @@
+
+
+/*
+ * Publisher: AO
+ * Year of Publication: 2025
+ * Copyright AO All Rights Reserved.
+ */
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "UObject/NoExportTypes.h"
+#include "BlueprintNativizationData.h"
+#include "TranslatorObjects/BaseTranslatorObject.h"
+#include "K2Node_Self.h"
+#include "SelfTranslatorObject.generated.h"
+
+/**
+ * 
+ */
+
+UCLASS()
+class BLUEPRINTNATIVIZATIONV2_API USelfTranslatorObject : public UTranslatorBPToCppObject
+{
+    GENERATED_BODY()
+
+public:
+
+    USelfTranslatorObject()
+    {
+        ClassNodeForCheck = {UK2Node_Self::StaticClass()};
+        NodeNamesForCheck = {};
+    }
+
+    virtual FString GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+
+};

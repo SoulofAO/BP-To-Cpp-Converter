@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.4.0",
+	"FriendlyName": "BlueprintNativizationV2",
+	"Description": "BP To CPP Converter is the only plugin, that implements seamless translation of Blueprint into readable C++",
+	"Category": "Other",
+	"CreatedBy": "AO",
+	"CreatedByURL": "https://github.com/SoulofAO",
+	"DocsURL": "https://docs.google.com/document/d/1hapXKHpW66YhH5ISvy9DdWMQ8hYPFE_2dKt2b3KvR88/edit?usp=sharing",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/SoulofAO",
+	"EngineVersion": "5.6.0",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "BlueprintNativizationV2",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": [ "Win64" ]
+		}
+	]
+}
