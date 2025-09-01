@@ -10,3 +10,6 @@ https://docs.google.com/document/d/1hapXKHpW66YhH5ISvy9DdWMQ8hYPFE_2dKt2b3KvR88/
 
 RU Documentation:
 https://docs.google.com/document/d/1zbzNf33FdAAFVgJn9ot3O3jLEq2TAZvDeZkUb8UKDJk/edit?usp=sharing
+
+Video Showcase:
+https://youtu.be/yq4Ssxnfm8Q?si=QK9EtARGEMcEnP9Z
