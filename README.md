@@ -14,6 +14,9 @@ https://docs.google.com/document/d/1zbzNf33FdAAFVgJn9ot3O3jLEq2TAZvDeZkUb8UKDJk/
 Video Showcase:
 https://youtu.be/yq4Ssxnfm8Q?si=QK9EtARGEMcEnP9Z
 
+Other Image:
+<img width="1912" height="1038" alt="image" src="https://github.com/user-attachments/assets/39a787c1-3bee-4324-acb8-ab29bb0cd8c1" />
+
 
 -----------------------
 
