@@ -24,7 +24,7 @@ Definitions:
 - "Author" means the initial copyright holder(s).
 - "Contributor" means any person submitting changes.
 - "Commercial Use" means use, distribution or provision of the Project or derivatives for direct or indirect monetary gain (including paid products, paid plugins, SaaS, etc.).
-- "Alternative Plugin" means a plugin or project for the same platform/goal providing substantially similar functionality to this Project.
+- "Alternative Plugin" means a plugin or project for the same platform/goal providing substantially similar functionality to this Project аnd/or based on the authors' existing code.
 
 License:
 1. The Author grants permission to copy, distribute and use the Project for non-commercial purposes.
