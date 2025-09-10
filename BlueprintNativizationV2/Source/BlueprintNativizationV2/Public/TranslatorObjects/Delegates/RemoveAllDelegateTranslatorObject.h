@@ -25,7 +25,7 @@ class BLUEPRINTNATIVIZATIONV2_API URemoveAllDelegateTranslatorObject : public UT
 		NodeNamesForCheck = { };
 	}
 
-	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
 	virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName) override
 	{

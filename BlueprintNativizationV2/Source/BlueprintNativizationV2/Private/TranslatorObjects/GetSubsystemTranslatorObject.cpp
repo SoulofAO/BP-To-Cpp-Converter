@@ -8,7 +8,7 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 
-FString UGetSubsystemTranslatorObject::GenerateInputParameterCodeForNode(
+FGenerateResultStruct UGetSubsystemTranslatorObject::GenerateInputParameterCodeForNode(
 	UK2Node* Node,
 	UEdGraphPin* Pin,
 	int PinIndex,
@@ -28,14 +28,14 @@ FString UGetSubsystemTranslatorObject::GenerateInputParameterCodeForNode(
 			FString SubsystemCppName = UBlueprintNativizationLibrary::GetUniqueFieldName(SubsystemClass);
 			FString ContextCall;
 
-			UEdGraphPin* Pin = GetSubsystemNode->GetWorldContextPin();
 			TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input, EPinExcludeFilter::ExecPin | EPinExcludeFilter::DelegatePin, EPinIncludeOnlyFilter::None);
 	
 			if (Pins[0]->LinkedTo.Num() > 0)
 			{
 				if (SubsystemClass->IsChildOf(ULocalPlayerSubsystem::StaticClass()))
 				{
-					return FString::Printf(TEXT("ULocalPlayer::GetSubsystem<%s>(%s->GetLocalPlayer())"), *SubsystemCppName, *NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack));
+					FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack);
+					return FGenerateResultStruct(FString::Printf(TEXT("ULocalPlayer::GetSubsystem<%s>(%s->GetLocalPlayer())"), *SubsystemCppName, *InputResultStruct.Code), InputResultStruct.Preparations);
 				}
 			}
 			else
@@ -57,7 +57,7 @@ FString UGetSubsystemTranslatorObject::GenerateInputParameterCodeForNode(
 		}
 	}
 
-	return TEXT("");
+	return FGenerateResultStruct();
 }
 
 TSet<FString> UGetSubsystemTranslatorObject::GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)

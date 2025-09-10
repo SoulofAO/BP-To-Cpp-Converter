@@ -8,7 +8,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UCallParentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UCallParentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_CallParentFunction* CallParentFunction = Cast<UK2Node_CallParentFunction>(Node))
 	{
@@ -16,16 +16,19 @@ FString UCallParentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString
 		if (Function)
 		{
 			FString Args;
+			TSet<FString> NewPreparations;
 			for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
 			{
 				UEdGraphPin* Pin = UBlueprintNativizationLibrary::GetPinByName(CallParentFunction->Pins, ParamIt->GetNameCPP());
 
 				if (Pin && Pin->Direction == EGPD_Input)
 				{
-					FString Arg = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallParentFunction, Pin, 0, MacroStack);
-					if (!Arg.IsEmpty())
+					FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallParentFunction, Pin, 0, MacroStack);
+					NewPreparations.Append(InputResultStruct.Preparations);
+
+					if (!InputResultStruct.Code.IsEmpty())
 					{
-						Args += Arg + ", ";
+						Args += InputResultStruct.Code + ", ";
 					}
 				}
 				else if (Pin)
@@ -37,7 +40,12 @@ FString UCallParentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString
 
 			Args = UBlueprintNativizationLibrary::TrimAfterLastComma(Args);
 
-			return FString::Format(TEXT("Super::{0}({1});"), { UBlueprintNativizationLibrary::GetUniqueFunctionName(CallParentFunction->GetTargetFunction(), ""), Args});
+			FString Content;
+			Content += GenerateNewPreparations(Preparations, NewPreparations);
+			Preparations.Append(NewPreparations);
+
+			Content += FString::Format(TEXT("Super::{0}({1});"), { UBlueprintNativizationLibrary::GetUniqueFunctionName(CallParentFunction->GetTargetFunction(), ""), Args});
+			return Content;
 		}
 
 	}

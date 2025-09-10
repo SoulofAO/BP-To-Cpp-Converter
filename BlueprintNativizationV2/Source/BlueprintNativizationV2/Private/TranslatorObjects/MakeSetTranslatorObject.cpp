@@ -8,18 +8,21 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 
-FString UMakeSetTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UMakeSetTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_MakeSet* MakeSetNode = Cast<UK2Node_MakeSet>(Node))
 	{
 		FName ElementCppType = *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
 		TArray<FString> Elements;
+		TSet<FString> Preparations;
 
 		for (UEdGraphPin* ElementPin : MakeSetNode->Pins)
 		{
 			if (ElementPin->Direction == EGPD_Input)
 			{
-				Elements.Add(NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeSetNode, ElementPin, 0, MacroStack));
+				FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeSetNode, ElementPin, 0, MacroStack);
+				Elements.Add(InputResultStruct.Code);
+				Preparations.Append(InputResultStruct.Preparations);
 			}
 		}
 
@@ -30,7 +33,7 @@ FString UMakeSetTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Nod
 				ElementsJoined
 			});
 
-		return ArrayLiteral;
+		return FGenerateResultStruct(ArrayLiteral, Preparations);
 	}
-	return "";
+	return FGenerateResultStruct();
 }

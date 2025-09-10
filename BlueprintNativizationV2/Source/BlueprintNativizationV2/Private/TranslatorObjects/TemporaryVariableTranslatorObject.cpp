@@ -8,13 +8,13 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 
-FString UTemporaryVariableTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UTemporaryVariableTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_TemporaryVariable* TemporaryVariable = Cast<UK2Node_TemporaryVariable>(Node))
 	{
 		return FString::Format(TEXT("{0}"), { *TemporaryVariable->GetName() });
 	}
-	return "";
+	return FGenerateResultStruct("");
 }
 
 TSet<FString> UTemporaryVariableTranslatorObject::GenerateLocalVariables(UK2Node* InputNode, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)

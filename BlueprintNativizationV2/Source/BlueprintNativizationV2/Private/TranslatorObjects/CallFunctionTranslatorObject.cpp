@@ -7,88 +7,132 @@
 #include "TranslatorObjects/CallFunctionTranslatorObject.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
-FString UCallFunctionTranslatorObject::GenerateCodeFromNode(
-	UK2Node* Node,
+#include "BlueprintNativizationSettings.h"
+
+
+FString UCallFunctionTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 	FString EntryPinName,
 	TArray<FVisitedNodeStack> VisitedNodes,
-	TArray<UK2Node*> MacroStack,
-	UNativizationV2Subsystem* NativizationV2Subsystem)
+	TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	FString Content;
-	UK2Node_CallFunction* CallFuncNode = Cast<UK2Node_CallFunction>(Node);
-	if (!CallFuncNode) return Content;
+	UK2Node_CallFunction* CallFunctionNode = Cast<UK2Node_CallFunction>(Node);
+	if (!CallFunctionNode) return Content;
 
-	UFunction* Function = CallFuncNode->GetTargetFunction();
+	UFunction* Function = CallFunctionNode->GetTargetFunction();
 	if (!Function) return Content;
 
 	UClass* OwnerClass = Function->GetOwnerClass();
-	FString FuncName = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, "");
+	FString FunctionName = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, "");
 
-	auto BuildArgs = [&](bool bIsStatic) -> FString
+	FString Args;
+	TSet<FString> NewPreparations;
+	BuildArgs(Function->HasAnyFunctionFlags(EFunctionFlags::FUNC_Static), Args, NewPreparations, CallFunctionNode, MacroStack, NativizationV2Subsystem);
+	Content += GenerateNewPreparations(Preparations, NewPreparations);
+	Preparations.Append(NewPreparations);
+
+	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
+
+	auto GenerateStandardCall = [&]()
 		{
-			FString Args;
-			bool bFirst = true;
-
-			FString WorldContextParamName;
-			UEdGraphPin* WorldContextPin = nullptr;
-			if (bIsStatic)
+			if (!Function->HasAnyFunctionFlags(EFunctionFlags::FUNC_Static))
 			{
-				WorldContextParamName = Function->GetMetaData(TEXT("WorldContext"));
-				if (!WorldContextParamName.IsEmpty())
+				UEdGraphPin* SelfPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("self"));
+
+				int32 NumCalls = 1;
+				if (SelfPin)
 				{
-					WorldContextPin = UBlueprintNativizationLibrary::GetPinByName(CallFuncNode->Pins, WorldContextParamName);
+					NumCalls = FMath::Max(1, SelfPin->LinkedTo.Num());
+				}
+
+				for (int32 Count = 0; Count < NumCalls; ++Count)
+				{
+					FString InputResultStruct;
+					if (SelfPin)
+					{
+						TArray<UK2Node*> LocalMacroStack = MacroStack;
+						InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, SelfPin, 0, LocalMacroStack).Code;
+					}
+
+					UEdGraphPin* RetPin = CallFunctionNode->GetReturnValuePin();
+					if (RetPin && RetPin->LinkedTo.Num() > 0)
+					{
+						if (InputResultStruct.IsEmpty())
+						{
+							FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
+							Content += FString::Format(TEXT("{0} = {1}({2});"), {
+								*RetVar,
+								*FunctionName,
+								*Args
+								});
+						}
+						else
+						{
+							FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
+							Content += FString::Format(TEXT("{0} = {1}->{2}({3});"), {
+								*RetVar,
+								*InputResultStruct,
+								*FunctionName,
+								*Args
+								});
+						}
+					}
+					else
+					{
+						if (InputResultStruct.IsEmpty())
+						{
+							Content += FString::Format(TEXT("{0}({1});"), {
+							*FunctionName,
+							*Args
+								});
+						}
+						else
+						{
+							Content += FString::Format(TEXT("{0}->{1}({2});"), {
+							*InputResultStruct,
+							*FunctionName,
+							*Args
+								});
+						}
+					}
 				}
 			}
-
-			UEdGraphPin* ReturnPin = CallFuncNode->GetReturnValuePin();
-			UEdGraphPin* SelfPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("self"));
-
-			for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
+			else
 			{
-				FString ParamCPPName = ParamIt->GetNameCPP();
-				UEdGraphPin* Pin = UBlueprintNativizationLibrary::GetPinByName(CallFuncNode->Pins, ParamCPPName);
-				if (!Pin) continue;
+				UEdGraphPin* RetPin = CallFunctionNode->GetReturnValuePin();
+				FString OwnerName = OwnerClass ? UBlueprintNativizationLibrary::GetUniqueFieldName(OwnerClass) : FString(TEXT("/*UnknownOwner*/"));
 
-				if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec || Pin == ReturnPin)
+				if (RetPin && RetPin->LinkedTo.Num() > 0)
 				{
-					continue;
-				}
-				if (!bIsStatic && Pin && Pin->PinName == TEXT("self"))
-				{
-					continue;
-				}
-
-				if (!bFirst) Args += TEXT(", ");
-				bFirst = false;
-
-				if (bIsStatic && WorldContextPin && WorldContextPin == Pin)
-				{
-					Args += TEXT("this");
-					continue;
-				}
-				const bool bIsOut = (ParamIt->PropertyFlags & CPF_OutParm) && !(ParamIt->PropertyFlags & CPF_ReturnParm);
-				if (bIsOut && Pin->Direction == EGPD_Output)
-				{
-					Args += UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes);
-				}
-				else if (Pin->Direction == EGPD_Input)
-				{
-					TArray<UK2Node*> LocalMacroStack = MacroStack;
-					Args += NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pin, 0, LocalMacroStack);
+					FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
+					Content += FString::Format(TEXT("{0} = {1}::{2}({3});"), {
+						*RetVar,
+						*OwnerName,
+						*FunctionName,
+						*Args
+						});
 				}
 				else
 				{
-					Args += UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes);
+					Content += FString::Format(TEXT("{0}::{1}({2});"), {
+						*OwnerName,
+						*FunctionName,
+						*Args
+						});
 				}
 			}
-
-			return Args;
 		};
 
-	if (!Function->HasAnyFunctionFlags(EFunctionFlags::FUNC_Static))
+	if (!Settings->bReplaceCallToIgnoreAssetsToDirectBlueprintCall)
+	{
+		GenerateStandardCall();
+		return Content;
+	}
+
+	UClass* Class = Function->GetOwnerClass();
+	if (UBlueprintNativizationLibrary::HasAnyChildInClasses(Class, Settings->IgnoreClassToRefGenerate) && !Function->HasAnyFunctionFlags(EFunctionFlags::FUNC_Static))
 	{
 		UEdGraphPin* SelfPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("self"));
-		FString Args = BuildArgs(false);
 
 		int32 NumCalls = 1;
 		if (SelfPin)
@@ -98,229 +142,230 @@ FString UCallFunctionTranslatorObject::GenerateCodeFromNode(
 
 		for (int32 Count = 0; Count < NumCalls; ++Count)
 		{
-			FString ObjectExpr;
+			FString InputResultStruct;
 			if (SelfPin)
 			{
 				TArray<UK2Node*> LocalMacroStack = MacroStack;
-				ObjectExpr = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, SelfPin, 0, LocalMacroStack);
+				InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, SelfPin, 0, LocalMacroStack).Code;
 			}
 
-			UEdGraphPin* RetPin = CallFuncNode->GetReturnValuePin();
-			if (RetPin && RetPin->LinkedTo.Num()>0)
+			UEdGraphPin* RetPin = CallFunctionNode->GetReturnValuePin();
+
+			if (InputResultStruct.IsEmpty())
 			{
-				if (ObjectExpr.IsEmpty())
+				GenerateStandardCall();
+				continue;
+			}
+
+			FString ParamsStructType = FunctionName + TEXT("_Parms");
+			Content += FString::Format(TEXT("{0} Parms;"), { *ParamsStructType });
+
+			FString ReturnPropName;
+			for (TFieldIterator<FProperty> It(Function); It; ++It)
+			{
+				FProperty* Prop = *It;
+				if (!Prop->HasAnyPropertyFlags(CPF_Parm)) continue;
+				if (Prop->HasAnyPropertyFlags(CPF_ReturnParm))
 				{
-					FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
-					Content += FString::Format(TEXT("{0} = {1}({2});"), {
-						*RetVar,
-						*FuncName,
-						*Args
-						});
+					ReturnPropName = Prop->GetName();
+					continue;
 				}
-				else
+
+				FString PropName = Prop->GetName();
+				UEdGraphPin* ParamPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, *PropName);
+				if (!ParamPin) continue;
+
+				TArray<UK2Node*> LocalMacroStackForParam = MacroStack;
+				FString ParamCode = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ParamPin, 0, LocalMacroStackForParam).Code;
+				if (!ParamCode.IsEmpty())
 				{
-					FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
-					Content += FString::Format(TEXT("{0} = {1}->{2}({3});"), {
-						*RetVar,
-						*ObjectExpr,
-						*FuncName,
-						*Args
-						});
+					Content += ParamCode;
+					Content += FString::Format(TEXT("Parms.{0} = {1};"), { *PropName, *ParamCode });
 				}
 			}
-			else
+
+			Content += FString::Printf(TEXT("UFunction* __Func_%s = %s->FindFunction(FName(TEXT(\"%s\")));\n"), *FunctionName, *InputResultStruct, *FunctionName);
+			Content += FString::Printf(TEXT("if(__Func_%s) { %s->ProcessEvent(__Func_%s, &Parms); }\n"), *FunctionName, *InputResultStruct, *FunctionName);
+
+			if (!ReturnPropName.IsEmpty() && RetPin && RetPin->LinkedTo.Num() > 0)
 			{
-				if (ObjectExpr.IsEmpty())
-				{
-					Content += FString::Format(TEXT("{0}({1});"), {
-					*FuncName,
-					*Args
-					});
-				}
-				else
-				{
-					Content += FString::Format(TEXT("{0}->{1}({2});"), {
-					*ObjectExpr,
-					*FuncName,
-					*Args
-					});
-				}
+				FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
+				Content += FString::Format(TEXT("{0} = Parms.{1};"), { *RetVar, *ReturnPropName });
 			}
 		}
+		return Content;
 	}
-	else 
+	else
 	{
-		FString Args = BuildArgs(true);
-
-		UEdGraphPin* RetPin = CallFuncNode->GetReturnValuePin();
-		FString OwnerName = OwnerClass ? UBlueprintNativizationLibrary::GetUniqueFieldName(OwnerClass) : FString(TEXT("/*UnknownOwner*/"));
-
-		if (RetPin && RetPin->LinkedTo.Num() > 0)
-		{
-			FString RetVar = UBlueprintNativizationLibrary::GetUniquePinName(RetPin, NativizationV2Subsystem->EntryNodes);
-			Content += FString::Format(TEXT("{0} = {1}::{2}({3});"), {
-				*RetVar,
-				*OwnerName,
-				*FuncName,
-				*Args
-				});
-		}
-		else
-		{
-			Content += FString::Format(TEXT("{0}::{1}({2});"), {
-				*OwnerName,
-				*FuncName,
-				*Args
-				});
-		}
+		GenerateStandardCall();
+		return Content;
 	}
 
 	return Content;
 }
 
 
-FString UCallFunctionTranslatorObject::GenerateInputParameterCodeForNode(
+void UCallFunctionTranslatorObject::BuildArgs(bool bIsStatic, FString& Code, TSet<FString>& Preparation, UK2Node_CallFunction* CallFunctionNode, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+{
+	UFunction* Function = CallFunctionNode->GetTargetFunction();
+	TArray<FString> AnswerArguments;
+
+	FString WorldContextParamName;
+
+	UEdGraphPin* WorldContextPin = nullptr;
+	if (bIsStatic)
+	{
+		WorldContextParamName = Function->GetMetaData(TEXT("WorldContext"));
+		if (!WorldContextParamName.IsEmpty())
+		{
+			WorldContextPin = UBlueprintNativizationLibrary::GetPinByName(CallFunctionNode->Pins, WorldContextParamName);
+		}
+	}
+
+	UEdGraphPin* ReturnPin = CallFunctionNode->GetReturnValuePin();
+	UEdGraphPin* SelfPin = UBlueprintNativizationLibrary::GetPinByName(CallFunctionNode->Pins, TEXT("self"));
+
+	for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
+	{
+		FString ParamCPPName = ParamIt->GetNameCPP();
+		UEdGraphPin* Pin = UBlueprintNativizationLibrary::FindClosestPinByName(CallFunctionNode->Pins, *ParamCPPName, 1);
+		
+		if (!Pin) continue;
+
+		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec || Pin == ReturnPin)
+		{
+			continue;
+		}
+		if (!bIsStatic && Pin && Pin->PinName == TEXT("self"))
+		{
+			continue;
+		}
+
+		if (bIsStatic && WorldContextPin && WorldContextPin == Pin)
+		{
+			AnswerArguments.Add(TEXT("this"));
+			continue;
+		}
+		const bool bIsOut = (ParamIt->PropertyFlags & CPF_OutParm) && !(ParamIt->PropertyFlags & CPF_ReturnParm);
+		if (bIsOut && Pin->Direction == EGPD_Output)
+		{
+			AnswerArguments.Add(UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes));
+
+			/*
+			FGenerateResultStruct InputParameterCode = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallFunctionNode, Pin, 0, MacroStack);
+			
+			Preparation.Append(InputParameterCode.Preparations);
+			Preparation.Add(FString::Format(TEXT("{0} {1} = {2};"), { *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, true),
+				UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes),
+				InputParameterCode.Code }));
+			*/
+		}
+		else if (Pin->Direction == EGPD_Input)
+		{
+			FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallFunctionNode, Pin, 0, MacroStack);
+			Preparation.Append(InputResultStruct.Preparations);
+			AnswerArguments.Add(InputResultStruct.Code);
+			/*
+			UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin, 0, false, MacroStack, NativizationV2Subsystem);
+			if (NextPin)
+			{
+				if (UK2Node_CallFunction* LocalFunction = Cast<UK2Node_CallFunction>(NextPin->GetOwningNode()))
+				{
+					TArray<FProperty*> Properties = UBlueprintNativizationLibrary::GetAllPropertiesByFunction(LocalFunction->GetTargetFunction());
+
+					FProperty* Property = UBlueprintNativizationLibrary::FindClosestPropertyByName(Properties, NextPin->PinName);
+
+					if ((Property->PropertyFlags & CPF_OutParm) && !(Property->PropertyFlags & CPF_ReturnParm && NextPin->Direction == EGPD_Output))
+					{
+						AnswerArguments.Add(UBlueprintNativizationLibrary::GetUniquePinName(NextPin, NativizationV2Subsystem->EntryNodes));
+						Preparation.Add(FString::Format(TEXT("{0};"), { InputResultStruct.Code }));
+						continue;
+					}
+				}
+			}
+			AnswerArguments.Add(InputResultStruct.Code);
+			Preparation.Append(InputResultStruct.Preparations);*/
+		}
+		else
+		{
+			AnswerArguments.Add(UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes));
+		}
+	}
+
+	Code = FString::Join(AnswerArguments, TEXT(", "));
+};
+
+
+FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeForNode(
 	UK2Node* Node,
 	UEdGraphPin* Pin,
 	int PinIndex,
 	TArray<UK2Node*> MacroStack,
 	UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-	if (Node && Node->IsNodePure() && Cast<UK2Node_CallFunction>(Node))
+	if (Node && Node->IsNodePure())
 	{
-		UK2Node_CallFunction* CallFuncNode = Cast<UK2Node_CallFunction>(Node);
-		UFunction* Function = CallFuncNode->GetTargetFunction();
-		if (!Function) return FString();
-
-		FString FuncName = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, "");
-		UClass* OwnerClass = Function->GetOwnerClass();
-
-		UEdGraphPin* ReturnPin = CallFuncNode->GetReturnValuePin();
-		UEdGraphPin* SelfPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("self"));
-
-		auto ResolveInputPinValue = [&](UEdGraphPin* FnPin, int InPinIndex = 0) -> FString
-			{
-				if (!FnPin) return FString();
-
-				TArray<UK2Node*> LocalMacroStack = MacroStack;
-				return NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, FnPin, InPinIndex, LocalMacroStack);
-			};
-
-		if (Pin == ReturnPin)
+		if (UK2Node_CallFunction* CallFunctionNode = Cast<UK2Node_CallFunction>(Node))
 		{
-			if (Function->HasAnyFunctionFlags(FUNC_Static))
+			UFunction* Function = CallFunctionNode->GetTargetFunction();
+			if (!Function) return FString();
+
+			FString FunctionName = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, "");
+			UClass* OwnerClass = Function->GetOwnerClass();
+
+			UEdGraphPin* ReturnPin = CallFunctionNode->GetReturnValuePin();
+			UEdGraphPin* SelfPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("self"));
+
+			bool bFirst = true;
+			FString Args;
+			TSet<FString> Preparations;
+
+			BuildArgs(Function->HasAnyFunctionFlags(FUNC_Static), Args, Preparations, CallFunctionNode, MacroStack, NativizationV2Subsystem);
+
+			TArray<FProperty*> Properties = UBlueprintNativizationLibrary::GetAllPropertiesByFunction(Function);
+			FProperty* Property = UBlueprintNativizationLibrary::FindClosestPropertyByName(Properties, *Pin->GetName());
+			const bool bIsOut = (Property->PropertyFlags & CPF_OutParm) && !(Property->PropertyFlags & CPF_ReturnParm);
+			if (bIsOut)
 			{
-				FString Args;
-				bool bFirst = true;
+				Preparations.Add(FString::Format(TEXT("{0}::{1}({2});"), { *UBlueprintNativizationLibrary::GetUniqueFieldName(OwnerClass), *FunctionName, *Args }));
+				return FGenerateResultStruct(UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes), Preparations);
 
-				FString WorldContextParamName = Function->GetMetaData(TEXT("WorldContext"));
-				UEdGraphPin* WorldContextPin = nullptr;
-				if (!WorldContextParamName.IsEmpty())
-				{
-					WorldContextPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, WorldContextParamName);
-				}
-
-				for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
-				{
-					UEdGraphPin* ItPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, ParamIt->GetNameCPP());
-					if (!ItPin) continue;
-
-					if (ItPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec ||
-						ItPin == ReturnPin)
-					{
-						continue;
-					}
-
-					if (ItPin->Direction == EGPD_Input)
-					{
-						if (!bFirst) Args += TEXT(", ");
-						bFirst = false;
-
-						if (WorldContextPin && WorldContextPin == ItPin)
-						{
-							Args += TEXT("this");
-						}
-						else
-						{
-							FString Arg = ResolveInputPinValue(ItPin, 0);
-							if (!Arg.IsEmpty())
-							{
-								Args += Arg;
-							}
-						}
-					}
-					else
-					{
-						if (!bFirst) Args += TEXT(", ");
-						bFirst = false;
-						Args += UBlueprintNativizationLibrary::GetUniquePinName(ItPin, NativizationV2Subsystem->EntryNodes);
-					}
-				}
-
-				return FString::Format(TEXT("{0}::{1}({2})"), {
-					*UBlueprintNativizationLibrary::GetUniqueFieldName(OwnerClass),
-					*FuncName,
-					*Args
-					});
 			}
 			else
 			{
-				FString ObjectExpr;
-				if (SelfPin)
+				if (ReturnPin == Pin)
 				{
-					TArray<UK2Node*> LocalMacroStack = MacroStack;
-					ObjectExpr = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, SelfPin, PinIndex, LocalMacroStack);
-				}
-
-				FString Args;
-				bool bFirst = true;
-				for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
-				{
-					UEdGraphPin* ItPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, ParamIt->GetNameCPP());
-					if (!ItPin) continue;
-					if (ItPin == ReturnPin) continue;
-					if (ItPin == SelfPin) continue;
-					if (ItPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec) continue;
-
-					if (!bFirst) Args += TEXT(", ");
-					bFirst = false;
-
-					if (ItPin->Direction == EGPD_Input)
+					if (Function->HasAnyFunctionFlags(FUNC_Static))
 					{
-						FString Arg = ResolveInputPinValue(ItPin, 0);
-						if (!Arg.IsEmpty())
-						{
-							Args += Arg;
-						}
+						return FGenerateResultStruct(
+							FString::Format(TEXT("{0}::{1}({2})"), { *UBlueprintNativizationLibrary::GetUniqueFieldName(OwnerClass), *FunctionName, *Args }),
+							Preparations
+						);
 					}
 					else
 					{
-						Args += UBlueprintNativizationLibrary::GetUniquePinName(ItPin, NativizationV2Subsystem->EntryNodes);
+						
+						FGenerateResultStruct GenerateResult = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, SelfPin, 0, MacroStack);
+						
+						Preparations.Append(GenerateResult.Preparations);
+
+						if (GenerateResult.Code.IsEmpty())
+						{
+							return FGenerateResultStruct(
+								FString::Format(TEXT("{0}({1})"), {*FunctionName, *Args }),
+								Preparations
+							);
+						}
+						else
+						{
+							return FGenerateResultStruct(
+								FString::Format(TEXT("{0}->{1}({2})"), { GenerateResult.Code, *FunctionName, *Args }),
+								Preparations
+							);
+						}
 					}
 				}
-;
-				if (ObjectExpr.IsEmpty())
-				{
-					return  FString::Format(TEXT("{0}({1})"), {*FuncName, *Args });
-				}
-				else
-				{
-					return FString::Format(TEXT("{0}->{1}({2})"), { *ObjectExpr, *FuncName, *Args });
-				}
-
 			}
-		}
-		else
-		{
-			if (Pin)
-			{
-				TArray<UK2Node*> LocalMacroStack = MacroStack;
-				return NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pin, PinIndex, LocalMacroStack);
-			}
-
-			return UBlueprintNativizationLibrary::GetUniquePinName(
-				UBlueprintNativizationLibrary::GetParentPin(Pin),
-				NativizationV2Subsystem->EntryNodes);
 		}
 	}
 
@@ -334,16 +379,11 @@ TSet<FString> UCallFunctionTranslatorObject::GenerateLocalVariables(UK2Node* Inp
 	TSet<FString> Contents;
 	Contents.Append(Super::GenerateLocalVariables(InputNode, MacroStack, NativizationV2Subsystem));
 
-	if (InputNode->IsNodePure())
-	{
-		return Contents;
-	}
-	
-	UK2Node_CallFunction* CallFuncNode = Cast<UK2Node_CallFunction>(InputNode);
+	UK2Node_CallFunction* CallFunctionNode = Cast<UK2Node_CallFunction>(InputNode);
 
 	TArray<UEdGraphPin*> PropertyPins;
 
-	UFunction* Function = CallFuncNode->GetTargetFunction();
+	UFunction* Function = CallFunctionNode->GetTargetFunction();
 	if (Function)
 	{
 		for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
@@ -355,12 +395,12 @@ TSet<FString> UCallFunctionTranslatorObject::GenerateLocalVariables(UK2Node* Inp
 				continue;
 			}
 
-			UEdGraphPin* OutputPin = UBlueprintNativizationLibrary::GetPinByName(CallFuncNode->Pins, Property->GetNameCPP());
+			UEdGraphPin* OutputPin = UBlueprintNativizationLibrary::GetPinByName(CallFunctionNode->Pins, Property->GetNameCPP());
 			if (OutputPin->Direction != EEdGraphPinDirection::EGPD_Output)
 			{
 				continue;
 			}
-			if (OutputPin == CallFuncNode->GetReturnValuePin())
+			if (OutputPin == CallFunctionNode->GetReturnValuePin())
 			{
 				continue;
 			}
@@ -368,7 +408,8 @@ TSet<FString> UCallFunctionTranslatorObject::GenerateLocalVariables(UK2Node* Inp
 			FGenerateFunctionStruct InputGenerateFunctionStruct;
 			UBlueprintNativizationLibrary::GetEntryByNodeAndEntryNodes(InputNode,NativizationV2Subsystem->EntryNodes, InputGenerateFunctionStruct);
 
-			if (!UBlueprintNativizationLibrary::CheckAnySubPinLinked(OutputPin) || UBlueprintNativizationLibrary::IsPinAllLinkInCurrentFunctionNode(OutputPin, InputGenerateFunctionStruct.Node, NativizationV2Subsystem->EntryNodes))
+			if (!UBlueprintNativizationLibrary::CheckAnySubPinLinked(OutputPin) ||
+				UBlueprintNativizationLibrary::IsPinAllLinkInCurrentFunctionNode(OutputPin, InputGenerateFunctionStruct.Node, NativizationV2Subsystem->EntryNodes))
 			{
 				PropertyPins.Add(OutputPin);
 			}

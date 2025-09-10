@@ -8,17 +8,21 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UBranchTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UBranchTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	FString Content;
 	UK2Node_IfThenElse* IfNode = Cast<UK2Node_IfThenElse>(Node);
 	if (!IfNode) return Content;
 
-	FString ConditionExpr = TEXT("/*Condition*/true");
+	TSet<FString> LocalPreparations = Preparations;
+	FString ConditionExpiration = TEXT("/*Condition*/true");
 	if (IfNode->GetConditionPin())
 	{
 		TArray<UK2Node*> CopyMacroStack = MacroStack;
-		ConditionExpr = NativizationV2Subsystem->GenerateInputParameterCodeForNode(IfNode, IfNode->GetConditionPin(), 0, CopyMacroStack);
+		FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(IfNode, IfNode->GetConditionPin(), 0, CopyMacroStack);
+		ConditionExpiration = GenerateResultStruct.Code;
+		Content += GenerateNewPreparations(Preparations, GenerateResultStruct.Preparations);
+		LocalPreparations.Append(GenerateResultStruct.Preparations);
 	}
 
 	UEdGraphPin* ThenPin = IfNode->GetThenPin();
@@ -37,25 +41,25 @@ FString UBranchTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString Ent
 	{
 		Content += FString::Format(TEXT("if ({0})\n{\n{1}\n}\nelse\n{\n{2}\n}\n"),
 			{
-				*ConditionExpr,
-				*NativizationV2Subsystem->GenerateCodeFromNode(ThenNode, ThenPinName, VisitedNodes, ThenMacroStack),
-				*NativizationV2Subsystem->GenerateCodeFromNode(ElseNode, ElsePinName, VisitedNodes, ElseMacroStack)
+				*ConditionExpiration,
+				*NativizationV2Subsystem->GenerateCodeFromNode(ThenNode, ThenPinName, VisitedNodes, LocalPreparations, ThenMacroStack),
+				*NativizationV2Subsystem->GenerateCodeFromNode(ElseNode, ElsePinName, VisitedNodes, LocalPreparations, ElseMacroStack)
 			});
 	}
 	else if (ThenNode)
 	{
 		Content += FString::Format(TEXT("if ({0})\n{\n{1}\n}\n"),
 			{
-				*ConditionExpr,
-				*NativizationV2Subsystem->GenerateCodeFromNode(ThenNode, ThenPinName, VisitedNodes, ThenMacroStack)
+				*ConditionExpiration,
+				*NativizationV2Subsystem->GenerateCodeFromNode(ThenNode, ThenPinName, VisitedNodes, LocalPreparations, ThenMacroStack)
 			});
 	}
 	else if (ElseNode)
 	{
 		Content += FString::Format(TEXT("if (!({0}))\n{\n{1}\n}\n"),
 			{
-				*ConditionExpr,
-				*NativizationV2Subsystem->GenerateCodeFromNode(ElseNode, ElsePinName, VisitedNodes, ElseMacroStack)
+				*ConditionExpiration,
+				*NativizationV2Subsystem->GenerateCodeFromNode(ElseNode, ElsePinName, VisitedNodes, LocalPreparations, ElseMacroStack)
 			});
 	}
 	return Content;

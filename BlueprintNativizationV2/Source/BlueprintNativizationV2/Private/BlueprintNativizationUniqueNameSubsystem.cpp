@@ -14,7 +14,8 @@
 #include "K2Node_Event.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "BlueprintNativizationSettings.h"
-
+#include "K2Node_EnhancedInputAction.h"
+#include "GameFramework/TouchInterface.h"
 
 FString UBlueprintNativizationUniqueNameSubsystem::SanitizeIdentifier(const FString& Input)
 {
@@ -40,12 +41,13 @@ FString UBlueprintNativizationUniqueNameSubsystem::SanitizeIdentifier(const FStr
 
 	return Result;
 }
-
 FString UBlueprintNativizationUniqueNameSubsystem::GetDefaultBaseName(UField* Field)
 {
-	auto HasValidPrefix = [](const FString& Name, const TCHAR Prefix)
+	auto HasValidPrefix = [](const FString& Name, const FString& Prefix)
 		{
-			return Name.StartsWith(FString::Chr(Prefix)) && Name.Len() > 1 && FChar::IsUpper(Name[1]);
+			return Name.StartsWith(Prefix)
+				&& Name.Len() > Prefix.Len()
+				&& FChar::IsUpper(Name[Prefix.Len()]);
 		};
 
 	if (!Field)
@@ -54,43 +56,60 @@ FString UBlueprintNativizationUniqueNameSubsystem::GetDefaultBaseName(UField* Fi
 	}
 
 	FString Name = Field->GetName();
-	FString BaseName;
+
+	Name = UBlueprintNativizationLibrary::RemoveBPPrefix(Name);
+
+	if (UClass* Class = Cast<UClass>(Field)) 
+	{
+		if (Class->IsChildOf<UInterface>() || Class->HasAnyClassFlags(CLASS_Interface))
+		{
+			if (HasValidPrefix(Name, TEXT("I_")))
+			{
+				Name = Name.Mid(2); 
+			}
+			else if (HasValidPrefix(Name, TEXT("I")))
+			{
+				Name = Name.Mid(1);
+			}
+			else if(HasValidPrefix(Name, TEXT("U")))
+			{
+				Name = Name.Mid(1);
+			}
+			else if(HasValidPrefix(Name, TEXT("U_")))
+			{
+				Name = Name.Mid(2);
+			}
+		}
+	}
 
 	if (const UEnum* Enum = Cast<UEnum>(Field))
 	{
-		BaseName = HasValidPrefix(Name, 'E') ? Name : "E" + Name;
+		Name = HasValidPrefix(Name, TEXT("E")) ? Name : TEXT("E") + Name;
 	}
 	else if (UClass* Class = Cast<UClass>(Field))
 	{
 		if (Class->IsChildOf<AActor>() || Class == AActor::StaticClass())
 		{
-			BaseName = HasValidPrefix(Name, 'A') ? Name : "A" + Name;
+			Name = HasValidPrefix(Name, TEXT("A")) ? Name : TEXT("A") + Name;
 		}
 		else if (Class->IsChildOf<UInterface>() || Class->HasAnyClassFlags(CLASS_Interface))
 		{
-			BaseName = Name;
 		}
 		else if (Field->IsA<UObject>())
 		{
-			BaseName = HasValidPrefix(Name, 'U') ? Name : "U" + Name;
-		}
-		else
-		{
-			BaseName = Name;
+			Name = HasValidPrefix(Name, TEXT("U")) ? Name : TEXT("U") + Name;
 		}
 	}
 	else if (Field->IsA<UStruct>())
 	{
-		BaseName = HasValidPrefix(Name, 'F') ? Name : "F" + Name;
+		Name = HasValidPrefix(Name, TEXT("F")) ? Name : TEXT("F") + Name;
 	}
-	else
-	{
-		BaseName = Name;
-	}
-	BaseName = BaseName.Replace(TEXT(" "), TEXT("_"));
-	BaseName = UBlueprintNativizationLibrary::RemoveBPPrefix(BaseName);
-	return BaseName;
+
+	Name = Name.Replace(TEXT(" "), TEXT("_"));
+
+	return Name;
 }
+
 
 FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFieldName(UField* Field)
 {
@@ -125,7 +144,14 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFieldName(UField* Fiel
 	{
 		NewNameString = NewNameString + ((Counter == 0) ? "" : FString::FromInt(Counter));
 		Counter++;
-		if (!GetAllFieldNames().Contains(FName(*NewNameString)))
+		if (Cast<UClass>(Field) && (Cast<UClass>(Field)->IsChildOf<UInterface>() || Cast<UClass>(Field)->HasAnyClassFlags(CLASS_Interface)))
+		{
+			if (!GetAllFieldNames().Contains(FName(*(TEXT("U") + NewNameString))) && !GetAllFieldNames().Contains(FName(*(TEXT("I") + NewNameString))))
+			{
+				break;
+			}
+		}
+		else if (!GetAllFieldNames().Contains(FName(*NewNameString)))
 		{
 			break;
 		}
@@ -244,6 +270,7 @@ TArray<FName> UBlueprintNativizationUniqueNameSubsystem::GetAllClassGlobalProper
 
 FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName_Internal(UK2Node* EntryNode, FString BaseFunctionName)
 {
+	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
 	if (!EntryNode || !EntryNode->GetBlueprint())
 	{
 		return NAME_None;
@@ -274,13 +301,21 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName_Internal(
 	FString UniqueNameString;
 	while (true)
 	{
-		if (Cast<UK2Node_FunctionEntry>(EntryNode) || Cast<UK2Node_Event>(EntryNode))
+		if (Cast<UK2Node_FunctionEntry>(EntryNode) || Cast<UK2Node_Event>(EntryNode) || Cast<UK2Node_EnhancedInputAction>(EntryNode))
 		{
 			UniqueNameString = FString::Format(TEXT("{0}{1}"), { *BaseFunctionName, (Counter == 0 ? TEXT("") : *FString::FromInt(Counter)) });
 		}
 		else
 		{
-			UniqueNameString = FString::Format(TEXT("{0}_GenerateFunction{1}"), { *BaseFunctionName, (Counter == 0 ? TEXT("") : *FString::FromInt(Counter)) });
+			if (Settings->bEnableGenerateSuffix)
+			{
+				UniqueNameString = FString::Format(TEXT("{0}_GenerateFunction{1}"), { *BaseFunctionName, (Counter == 0 ? TEXT("") : *FString::FromInt(Counter)) });
+
+			}
+			else
+			{
+				UniqueNameString = FString::Format(TEXT("{0}{1}"), { *BaseFunctionName, (Counter == 0 ? TEXT("") : *FString::FromInt(Counter)) });
+			}
 		}
 		Counter++;
 
@@ -309,14 +344,15 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName(UFunction
 			Function->GetFName())
 	);
 
-	const FString BaseFunctionName = Function ? Function->GetName() : PredictName;
+	FName OriginalName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EntryNode);
+	const FString BaseFunctionName = OriginalName.IsNone() ? PredictName : OriginalName.ToString();
 	return GetUniqueFunctionName_Internal(EntryNode, BaseFunctionName);
 }
 
 FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName(UK2Node* EntryNode, TArray<FGenerateFunctionStruct> EntryNodes, FString PredictName)
 {
-	UFunction* Function = UBlueprintNativizationLibrary::GetFunctionByNodeAndEntryNodes(EntryNode, EntryNodes);
-	const FString BaseFunctionName = Function ? Function->GetName() : PredictName;
+	FName OriginalName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EntryNode);
+	const FString BaseFunctionName = OriginalName.IsNone() ? PredictName : OriginalName.ToString();
 	return GetUniqueFunctionName_Internal(EntryNode, BaseFunctionName);
 }
 
@@ -482,7 +518,7 @@ FName UBlueprintNativizationUniqueNameSubsystem::GenerateUniqueLambdaVariableNam
 	FString UniqueNameString;
 	do
 	{
-		UniqueNameString = Settings->bEnableGenerateValueSuffix
+		UniqueNameString = Settings->bEnableGenerateSuffix
 			? FString::Format(TEXT("{0}_GeneratedValue{1}"), { *LambdaMainName, (Counter == 0 ? TEXT("") : *FString::FromInt(Counter)) })
 			: FString::Format(TEXT("{0}{1}"), { *LambdaMainName, (Counter == 0 ? TEXT("") : *FString::FromInt(Counter)) });
 
@@ -515,7 +551,7 @@ FName UBlueprintNativizationUniqueNameSubsystem::GenerateConstructorLambdaUnique
 
 	while (true)
 	{
-		if (Settings->bEnableGenerateValueSuffix)
+		if (Settings->bEnableGenerateSuffix)
 		{
 			UniqueNameString = FString::Format(TEXT("{0}_GeneratedValue{1}"), { *LambdaMainName, ((Counter == 0) ? "" : FString::FromInt(Counter)) });
 		}
@@ -559,11 +595,11 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniquePinVariableName(UEdGra
 
 	if (UK2Node_FunctionEntry* FunctionEntryNode = Cast<UK2Node_FunctionEntry>(Pin->GetOwningNode()))
 	{
-		return *UBlueprintNativizationLibrary::GetUniquePropertyName(OwningFunction->FindPropertyByName(*Pin->GetName()), EntryNodes);
+		return *UBlueprintNativizationLibrary::GetUniquePropertyName(OwningFunction->FindPropertyByName(*Pin->GetName()));
 	}
 	else if (UK2Node_Event* EventEntryNode = Cast<UK2Node_Event>(Pin->GetOwningNode()))
 	{
-		return *UBlueprintNativizationLibrary::GetUniquePropertyName(OwningFunction->FindPropertyByName(*Pin->GetName()), EntryNodes);
+		return *UBlueprintNativizationLibrary::GetUniquePropertyName(OwningFunction->FindPropertyByName(*Pin->GetName()));
 	}
 
 	FRegisterVariable* ExistingRegister = UniqueVarNamesArray.FindByKey(FRegisterVariable(OwningClass, OwningFunction, EntryNode, false));
@@ -593,7 +629,7 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniquePinVariableName(UEdGra
 	
 	while (true)
 	{
-		if (Settings->bEnableGenerateValueSuffix)
+		if (Settings->bEnableGenerateSuffix)
 		{
 			UniqueNameString = FString::Format(TEXT("{0}_GeneratedValue{1}"), { *BasePinName, ((Counter == 0) ? "" : FString::FromInt(Counter)) });
 		}

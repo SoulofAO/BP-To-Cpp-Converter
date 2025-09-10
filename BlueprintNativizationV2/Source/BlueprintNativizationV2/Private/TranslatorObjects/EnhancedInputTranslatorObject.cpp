@@ -8,6 +8,7 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationData.h"
+#include "BlueprintNativizationSettings.h"
 #include "InputAction.h"
 
 
@@ -97,8 +98,24 @@ FString UEnhancedInputTranslatorObject::GenerateSetupPlayerInputComponentFunctio
 				FGenerateFunctionStruct GenerateFunctionStruct;
 				UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, NextNode, GenerateFunctionStruct);
 
+				FString InputActionContent;
+				if (NativizationV2Subsystem->LeftAllAssetRefInBlueprint)
+				{
+					InputActionContent = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(EnhancedInputAction->InputAction->GetName(), InputNode->GetBlueprint()->GeneratedClass);
+				}
+				else
+				{
+					InputActionContent = FString::Format(
+						TEXT("ConstructorHelpers::FObjectFinder<{0}>(TEXT(\"{1}\")).Object"),
+						{ 
+							UBlueprintNativizationLibrary::GetUniqueFieldName(EnhancedInputAction->InputAction->GetClass()),
+							FSoftObjectPath(EnhancedInputAction->InputAction).ToString()
+						}
+					);
+
+				}
 				Content += FString::Format(TEXT("EnhancedInputComponent->BindAction({0}, ETriggerEvent::{1}, this, &{2}::{3});\n"),
-					{ UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(EnhancedInputAction->InputAction->GetName(), InputNode->GetBlueprint()->GeneratedClass),
+					{ InputActionContent,
 					ExecNames[i],
 					UBlueprintNativizationLibrary::GetUniqueFieldName(InputNode->GetBlueprint()->GeneratedClass),
 					GenerateFunctionStruct.Name.ToString()
@@ -116,14 +133,17 @@ FString UEnhancedInputTranslatorObject::GenerateGlobalVariables(UK2Node* InputNo
 
 	if (UK2Node_EnhancedInputAction* EnhancedInputAction = Cast<UK2Node_EnhancedInputAction>(InputNode))
 	{
-		Content += FString::Format(TEXT("UPROPERTY(EditAnywhere, BlueprintReadOnly) \n {0} {1};\n"),
-			{UBlueprintNativizationLibrary::GetUniqueFieldName(EnhancedInputAction->InputAction->GetClass()) + "*",
-			UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(EnhancedInputAction->InputAction->GetName(), InputNode->GetBlueprint()->GeneratedClass)});
+		if (NativizationV2Subsystem->LeftAllAssetRefInBlueprint)
+		{
+			Content += FString::Format(TEXT("UPROPERTY(EditAnywhere, BlueprintReadOnly) \n {0} {1};\n"),
+				{UBlueprintNativizationLibrary::GetUniqueFieldName(EnhancedInputAction->InputAction->GetClass()) + "*",
+				UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(EnhancedInputAction->InputAction->GetName(), InputNode->GetBlueprint()->GeneratedClass)});
+		}
 	}
 	return Content;
 }
 
-FString UEnhancedInputTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_EnhancedInputAction* EnhancedInputAction = Cast<UK2Node_EnhancedInputAction>(Node))
 	{
@@ -188,7 +208,7 @@ FString UEnhancedInputTranslatorObject::GenerateInputParameterCodeForNode(UK2Nod
 		}
 	}
 
-	return "";
+	return FGenerateResultStruct();
 }
 
 bool UEnhancedInputTranslatorObject::CanContinueGenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -205,6 +225,8 @@ TSet<FString> UEnhancedInputTranslatorObject::GenerateCppIncludeInstructions(UK2
 {
 	TSet<FString> HeaderIncludes;
 	HeaderIncludes.Add(TEXT("#include \"EnhancedInputComponent.h\""));
+	HeaderIncludes.Add(TEXT("#include \"InputAction.h\""));
+	HeaderIncludes.Add(TEXT("#include \"InputMappingContext.h\""));
 	return HeaderIncludes;
 }
 

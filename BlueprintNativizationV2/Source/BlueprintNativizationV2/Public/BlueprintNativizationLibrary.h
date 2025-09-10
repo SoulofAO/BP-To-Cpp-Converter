@@ -38,10 +38,13 @@ public:
     //Find all function for Execs Nodes. 
     static TArray<UK2Node*> GetAllInputNodes(TArray<UK2Node*> AllNodes, bool OnlyPureNode = true);
 
-    static UEdGraphPin* FindOptimalPin(const TArray<UEdGraphPin*>& SubPins, const FString& OriginalPropertyName);
+    static UEdGraphPin * FindClosestPinByName(const TArray<UEdGraphPin*>& Pins, const FString & OriginalName, int32 MinScore =-1);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static void CloseTabsWithSpecificAssets(TArray<UObject*>& Assets);
+
+    UFUNCTION(BlueprintCallable, Category = "Nativization")
+    static TArray<FName> GetAllBlueprintCallableNames(UBlueprint* Blueprint, bool RemoveAllMacro = true, bool bUseDisplayName = true);
 
     static UBlueprint* GetBlueprintFromFunction(UFunction* Function);
 
@@ -95,7 +98,7 @@ public:
 
     static FString GetUniqueFunctionName(UFunction* Function, FString PredictName);
 
-    static FString GetUniquePropertyName(FProperty* Property, TArray<FGenerateFunctionStruct> EntryNodes);
+    static FString GetUniquePropertyName(FProperty* Property);
 
     static FString GetUniquePinName(UEdGraphPin* Pin, TArray<FGenerateFunctionStruct> EntryNodes);
 
@@ -120,7 +123,7 @@ public:
 
     static TArray<FName> GetAllPropertyNamesByStruct(UScriptStruct* Struct);
 
-    static FName GetOriginalFunctionNameByNode(UK2Node* Node);
+    static FName GetEntryFunctionNameByNode(UK2Node* Node);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static UEditorUtilityWidget* OpenEditorUtilityWidget(UEditorUtilityWidgetBlueprint* WidgetBlueprint);
@@ -243,6 +246,12 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static TSet<UObject*> GetAllDependencies(UObject* InputTarget, TArray<TSubclassOf<UObject>> IgnoreClasses, TArray<UObject*> IgnoreObjects);
 
+    static bool	HasAnyChildInClasses(UClass* Class, TArray<UClass*> Classes);
+
+    static bool HasAnyChildInClasses(UClass* Class, TArray<TSubclassOf<UObject>> Classes);
+
+    static bool HasAnyChildInClasses(UClass* Class, TArray<TSoftClassPtr<UObject>> Classes);
+
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static void CollectDependencies(UObject* InputTarget, TSet<UObject*>& OutObjects);
 
@@ -256,7 +265,11 @@ public:
 
     static FString GetUniquePropertyComponentGetterName(UActorComponent* ActorComponent, const TArray<FGenerateFunctionStruct>& EntryNodes);
 
+    static UActorComponent * GetComponentByPropertyName(FString PropertyName, UBlueprint * Blueprint);
+
     static USCS_Node* FindSCSNodeForComponent(UActorComponent* ActorComponent);
+
+    static USCS_Node* FindSCSNodeForPropertyName(FString PropertyName, UBlueprint* Blueprint);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static TArray<FString> OpenFileDialog(FString FileTypes = TEXT("All Files (*.*)|*.*"));

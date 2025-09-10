@@ -9,7 +9,7 @@
 #include "BlueprintNativizationSubsystem.h"
 
 
-FString USetMemberStructTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString USetMemberStructTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_SetFieldsInStruct* SetFieldsInStructNode = Cast<UK2Node_SetFieldsInStruct>(Node))
 	{
@@ -20,11 +20,29 @@ FString USetMemberStructTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FS
 
 		SetFieldsInStructNode->StructType;
 
+		FGenerateResultStruct GenerateStructRefResult = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, StructRef, 0, MacroStack);
+
+		TSet<FString> NewPreparations;
+
+		TArray<FGenerateResultStruct> GenerateEdGraphResults;
+
 		for (UEdGraphPin* EdGraphPin : Pins)
 		{
-			Content += FString::Format(TEXT("{0}.{1} = {2}; \n"), { NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, StructRef, 0, MacroStack),
-				EdGraphPin->GetName(), NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, EdGraphPin, 0, MacroStack)});
+			GenerateEdGraphResults.Add(NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, EdGraphPin, 0, MacroStack));
 		}
+		for (FGenerateResultStruct Result : GenerateEdGraphResults)
+		{
+			NewPreparations.Append(Result.Preparations);
+		}
+		Content += GenerateNewPreparations(Preparations, NewPreparations);
+		Preparations.Append(NewPreparations);
+
+		for (UEdGraphPin* EdGraphPin : Pins)
+		{
+			Content += FString::Format(TEXT("{0}.{1} = {2}; \n"), { GenerateStructRefResult.Code,
+			EdGraphPin->GetName(), NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, EdGraphPin, 0, MacroStack).Code});
+		}
+
 		return Content;
 	}
 	return FString();

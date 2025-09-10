@@ -13,12 +13,10 @@
 #include "K2Node_SwitchEnum.h"
 #include "K2Node_Switch.h"
 
-FString USwitchTranslatorObject::GenerateCodeFromNode(
-    UK2Node* Node,
+FString USwitchTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
     FString EntryPinName,
     TArray<FVisitedNodeStack> VisitedNodes,
-    TArray<UK2Node*> MacroStack,
-    UNativizationV2Subsystem* NativizationV2Subsystem)
+    TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
     FString Content;
 
@@ -27,14 +25,19 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(
 
     UEdGraphPin* DefaultPin = SwitchNode->GetDefaultPin();
     UEdGraphPin* SelectionPin = SwitchNode->GetSelectionPin();
-    FString SelectionExpr = TEXT("/*Selection*/0");
+    FString SelectionExpiration = TEXT("/*Selection*/0");
+    
+	TSet<FString> LocalPreparations = Preparations;
 
     if (SelectionPin)
     {
-        SelectionExpr = NativizationV2Subsystem->GenerateInputParameterCodeForNode(SwitchNode, SelectionPin, 0, MacroStack);
+        FGenerateResultStruct SelectionExpirationResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(SwitchNode, SelectionPin, 0, MacroStack);
+        LocalPreparations.Append(SelectionExpirationResultStruct.Preparations);
+        SelectionExpiration = SelectionExpirationResultStruct.Code;
     }
 
-    // �������� ��� �������� ����, ����� default
+	Content += GenerateNewPreparations(Preparations, LocalPreparations); 
+
     TArray<UEdGraphPin*> OptionPins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin);
     OptionPins.Remove(DefaultPin);
 
@@ -42,7 +45,6 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(
 
     if (bIsStringLikeSwitch)
     {
-        // === ��������� Switch on String ����� if/else if ===
         bool bFirst = true;
 
         for (UEdGraphPin* CasePin : OptionPins)
@@ -52,13 +54,12 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(
             UK2Node* CaseNode = Cast<UK2Node>(CasePin->LinkedTo[0]->GetOwningNode());
             FString CasePinName = CasePin->LinkedTo[0]->GetName();
 
-            // �������� ��� ���������
             FString CaseValue = FString::Format(TEXT("\"{0}\""), { *CasePin->GetName() });
-            FString CaseBody = NativizationV2Subsystem->GenerateCodeFromNode(CaseNode, CasePinName, VisitedNodes, MacroStack);
+            FString CaseBody = NativizationV2Subsystem->GenerateCodeFromNode(CaseNode, CasePinName, VisitedNodes, LocalPreparations, MacroStack);
 
             Content += FString::Format(TEXT("{0}if ({1} == {2})\n{\n{3}\n}\n"), {
                 bFirst ? TEXT("") : TEXT("else "),
-                *SelectionExpr,
+                *SelectionExpiration,
                 *CaseValue,
                 *CaseBody
                 });
@@ -66,20 +67,18 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(
             bFirst = false;
         }
 
-        // Default ��� �����
         if (DefaultPin && DefaultPin->LinkedTo.Num() > 0 && DefaultPin->LinkedTo[0])
         {
             UK2Node* DefaultNode = Cast<UK2Node>(DefaultPin->LinkedTo[0]->GetOwningNode());
             FString DefaultPinName = DefaultPin->LinkedTo[0]->GetName();
-            FString DefaultBody = NativizationV2Subsystem->GenerateCodeFromNode(DefaultNode, DefaultPinName, VisitedNodes, MacroStack);
+            FString DefaultBody = NativizationV2Subsystem->GenerateCodeFromNode(DefaultNode, DefaultPinName, VisitedNodes, LocalPreparations, MacroStack);
 
             Content += FString::Format(TEXT("else\n{\n{0}\n}\n"), { *DefaultBody });
         }
     }
     else
     {
-        // === ������� switch ��� int/enum ===
-        Content += FString::Format(TEXT("switch ({0})\n{\n"), { *SelectionExpr });
+        Content += FString::Format(TEXT("switch ({0})\n{\n"), { *SelectionExpiration });
 
         for (UEdGraphPin* CasePin : OptionPins)
         {
@@ -112,7 +111,7 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(
                 CaseValue = CasePin->PinName.ToString();
             }
 
-            FString CaseBody = NativizationV2Subsystem->GenerateCodeFromNode(CaseNode, CasePinName, VisitedNodes, MacroStack);
+            FString CaseBody = NativizationV2Subsystem->GenerateCodeFromNode(CaseNode, CasePinName, VisitedNodes, LocalPreparations, MacroStack);
 
             Content += FString::Format(TEXT("case {0}:\n{\n{1}\nbreak;\n}\n"), {
                 *CaseValue,
@@ -124,7 +123,7 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(
         {
             UK2Node* DefaultNode = Cast<UK2Node>(DefaultPin->LinkedTo[0]->GetOwningNode());
             FString DefaultPinName = DefaultPin->LinkedTo[0]->GetName();
-            FString DefaultBody = NativizationV2Subsystem->GenerateCodeFromNode(DefaultNode, DefaultPinName, VisitedNodes, MacroStack);
+            FString DefaultBody = NativizationV2Subsystem->GenerateCodeFromNode(DefaultNode, DefaultPinName, VisitedNodes, LocalPreparations, MacroStack);
 
             Content += FString::Format(TEXT("default:\n{\n{0}\nbreak;\n}\n"), { *DefaultBody });
         }

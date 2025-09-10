@@ -34,9 +34,6 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FModuleCompilerFinishedEvent, const FStri
 *	https://wiki.unrealengine.com/Custom_Blueprint_Node_Creation
 */
 
-inline FString ModuleAPIName = TEXT("BLUEPRINTNATIVIZATIONMODULE_API");
-
-
 UCLASS()
 class UNativizationV2Subsystem : public UEngineSubsystem
 {
@@ -153,17 +150,19 @@ public:
 
     bool GetIncludeFromField(UField* OwnerField, FString& IncludePath);
 
+    TArray<UK2Node*> GetAllContextNodes();
+
     TSet<FString> GetInputParametersForEntryNode(UK2Node* EntryNode);
 
     FString ProcessGraphsForCodeGeneration(UK2Node* Node);
 
     FString GenerateSetupPlayerInputComponentCppCode(UBlueprint* Blueprint);
 
-    FString GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack);
+    FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack);
 
     TSet<FString> GetAllUsedLocalGenerateFunctionParameters(UK2Node* EntryNode, FString EntryPinName);
 
-    FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack);
+    FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TSet<FString> Preparations, TArray<UK2Node*> MacroStack);
 
     FString GenerateLocalVariablesCodeFromEntryNode(UK2Node* EntryNode, TArray<UK2Node*> MacroStack = TArray<UK2Node*>());
 

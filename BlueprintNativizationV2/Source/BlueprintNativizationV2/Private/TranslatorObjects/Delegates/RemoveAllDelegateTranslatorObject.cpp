@@ -8,7 +8,7 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 
-FString URemoveAllDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString URemoveAllDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
     if (UK2Node_ClearDelegate* RemoveDelegate = Cast<UK2Node_ClearDelegate>(Node))
     {
@@ -16,8 +16,7 @@ FString URemoveAllDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, 
         if (DelegateProperty)
         {
             TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input, EPinExcludeFilter::None, EPinIncludeOnlyFilter::DelegatePin);
-            return UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProperty,
-                NativizationV2Subsystem->EntryNodes) + TEXT("->Clear();");
+            return UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProperty) + TEXT("->Clear();");
         }
     }
     return FString();

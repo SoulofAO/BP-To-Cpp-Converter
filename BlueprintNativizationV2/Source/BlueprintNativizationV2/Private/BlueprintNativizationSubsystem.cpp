@@ -52,6 +52,8 @@ FNativizationModuleResult UNativizationV2Subsystem::RunNativizationForAllObjects
 	bool SaveCache, bool NewLeftAllAssetRefInBlueprint, FString SaveCachePath
 )
 {
+	FString ModuleName = UBlueprintNativizationSettingsLibrary::GetModuleName(); 
+
 	FNativizationModuleResult NativizationModuleResult;
 	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
 
@@ -84,8 +86,8 @@ FNativizationModuleResult UNativizationV2Subsystem::RunNativizationForAllObjects
 			NativizationCodesResult.Add(Code);
 		}
 
-		NativizationModuleResult.ModuleCode = GenerateUnrealModule("BlueprintNativizationModule", InputTargets);
-		NativizationModuleResult.ModuleBuildCsCode = GenerateUnrealBuildCsModule("BlueprintNativizationModule", InputTargets);
+		NativizationModuleResult.ModuleCode = GenerateUnrealModule(ModuleName, InputTargets);
+		NativizationModuleResult.ModuleBuildCsCode = GenerateUnrealBuildCsModule(ModuleName, InputTargets);
 	}
 	else
 	{
@@ -134,9 +136,8 @@ FNativizationModuleResult UNativizationV2Subsystem::RunNativizationForAllObjects
 			FNativizationCode Code = GenerateCodeForObject(Object, "None");
 			NativizationCodesResult.Add(Code);
 		}
-
-		NativizationModuleResult.ModuleCode = GenerateUnrealModule("BlueprintNativizationModule", { FilteredDependencies.Array() });
-		NativizationModuleResult.ModuleBuildCsCode = GenerateUnrealBuildCsModule("BlueprintNativizationModule", { FilteredDependencies.Array() });
+		NativizationModuleResult.ModuleCode = GenerateUnrealModule(ModuleName, { FilteredDependencies.Array() });
+		NativizationModuleResult.ModuleBuildCsCode = GenerateUnrealBuildCsModule(ModuleName, { FilteredDependencies.Array() });
 	}
 
 	NativizationModuleResult.Sucsess = !NativizationCodesResult.IsEmpty();
@@ -172,11 +173,9 @@ FNativizationModuleResult UNativizationV2Subsystem::RunNativizationForAllObjects
 			}
 			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 
-			const FString TargetModuleName = TEXT("BlueprintNativizationModule");
-
 			auto& HotReloadModule = IHotReloadModule::Get();
 			HotReloadModule.RecompileModule(
-				"BlueprintNativizationModule",
+				*ModuleName,
 				*GLog,
 				ERecompileModuleFlags::ReloadAfterRecompile
 			);
@@ -218,7 +217,7 @@ FNativizationCode UNativizationV2Subsystem::RunNativizationForOneFunctionBluepri
 
 void UNativizationV2Subsystem::PrepareNewModuleToWork()
 {
-	const FString ModuleName = "BlueprintNativizationModule";
+	const FString ModuleName = UBlueprintNativizationSettingsLibrary::GetModuleName();
 
 	FNativizationModuleResult NativizationModuleResult;
 	NativizationModuleResult.ModuleCode = GenerateUnrealModule(ModuleName, {});
@@ -622,7 +621,7 @@ void UNativizationV2Subsystem::SaveNativizationResult(FNativizationModuleResult 
 	if (Directory.IsEmpty())
 	{
 		Directory = FPaths::ProjectDir();
-		OutputDirectory = FPaths::Combine(Directory, TEXT("Source"), "BlueprintNativizationModule");
+		OutputDirectory = FPaths::Combine(Directory, TEXT("Source"), UBlueprintNativizationSettingsLibrary::GetModuleName());
 	}
 	else
 	{
@@ -807,17 +806,7 @@ FString UNativizationV2Subsystem::GenerateUnrealBuildCsModule(const FString& Mod
 			if (!Blueprint->GeneratedClass->IsChildOf<UInterface>())
 			{
 				EntryNodes = GenerateAllGenerateFunctionStruct(Blueprint, "");
-				for (FGenerateFunctionStruct EntryNode : EntryNodes)
-				{
-					TArray<UK2Node*> ExecNodes = UBlueprintNativizationLibrary::GetAllExecuteNodesInFunctionWithMacroSupported(EntryNode.Node, this);
-					TArray<UK2Node*> InputNodes = UBlueprintNativizationLibrary::GetAllInputNodes(ExecNodes, true);
-					ExecNodes.Append(InputNodes);
-
-					for (UK2Node* ExecNode : ExecNodes)
-					{
-						AnswerNodes.AddUnique(ExecNode);
-					}
-				}
+				AnswerNodes.Append(GetAllContextNodes());
 			}
 		}
 
@@ -852,10 +841,10 @@ FString UNativizationV2Subsystem::GenerateUnrealBuildCsModule(const FString& Mod
 
 void UNativizationV2Subsystem::CreateJSONCache(FString CacheDirectory)
 {
-	// Если путь не задан, устанавливаем путь по умолчанию
+	FString ModuleName = UBlueprintNativizationSettingsLibrary::GetModuleName();
 	if (CacheDirectory.IsEmpty())
 	{
-		CacheDirectory = FPaths::Combine(FPaths::ProjectDir(), TEXT("Source/BlueprintNativizationModule"));
+		CacheDirectory = FPaths::Combine(FPaths::ProjectDir(), FString::Format(TEXT("Source/{0}"), { ModuleName }));
 	}
 
 	TSharedPtr<FJsonObject> JsonObject = MakeShareable(new FJsonObject());
@@ -901,9 +890,10 @@ void UNativizationV2Subsystem::CreateJSONCache(FString CacheDirectory)
 
 void UNativizationV2Subsystem::ReapplyJSONCache(FString CacheFilePath)
 {
+	FString ModuleName = UBlueprintNativizationSettingsLibrary::GetModuleName();
 	if (CacheFilePath.IsEmpty())
 	{
-		CacheFilePath = FPaths::Combine(FPaths::ProjectDir(), TEXT("Source/BlueprintNativizationModule"));
+		CacheFilePath = FPaths::Combine(FPaths::ProjectDir(), FString::Format(TEXT("Source/{0}"), { ModuleName }));
 		CacheFilePath = FPaths::Combine(CacheFilePath, TEXT("BlueprintNativizationCache.bpncache"));
 	}
 
@@ -966,7 +956,7 @@ void UNativizationV2Subsystem::ReapplyJSONCache(FString CacheFilePath)
 
 bool UNativizationV2Subsystem::HasNewClassesAfterHotReload()
 {
-	const FString TargetModuleName = TEXT("BlueprintNativizationModule");
+	const FString TargetModuleName = UBlueprintNativizationSettingsLibrary::GetModuleName();
 
 	for (TObjectIterator<UClass> ClassIt; ClassIt; ++ClassIt)
 	{
@@ -1128,7 +1118,7 @@ void UNativizationV2Subsystem::ReplaceBlueprintTypesAfterHotReload(const TMap<UF
 								Property->ExportText_InContainer(0, Value, ActorComponent, nullptr, ActorComponent, PPF_None);
 								SavedProperties.Add(TPair<FName, FString>(
 									UBlueprintNativizationLibrary::GetUniquePropertyComponentGetterName(ActorComponent, EntryNodes) +
-									UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes),
+									UBlueprintNativizationLibrary::GetUniquePropertyName(Property),
 									Value)
 								);
 
@@ -1166,7 +1156,7 @@ void UNativizationV2Subsystem::ReplaceBlueprintTypesAfterHotReload(const TMap<UF
 
 								if (UBlueprintNativizationLibrary::ContainsAssetInPinType(BPVariableDescription.VarType, BPVariableDescription.DefaultValue, nullptr))
 								{
-									FString Name = UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes);
+									FString Name = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
 									SavedProperties.Add(*Name, BPVariableDescription.DefaultValue);
 								}
 							}
@@ -1221,9 +1211,9 @@ void UNativizationV2Subsystem::ReplaceBlueprintTypesAfterHotReload(const TMap<UF
 						{
 							FProperty* Property = *PropIt;
 							FString PropertyName = ActorComponent->GetName();
-							if (SavedProperties.Contains(*(PropertyName + UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes))))
+							if (SavedProperties.Contains(*(PropertyName + UBlueprintNativizationLibrary::GetUniquePropertyName(Property))))
 							{
-								if (const FString* SavedValue = SavedProperties.Find(*(PropertyName + UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes))))
+								if (const FString* SavedValue = SavedProperties.Find(*(PropertyName + UBlueprintNativizationLibrary::GetUniquePropertyName(Property))))
 								{
 									Property->ImportText_InContainer(**SavedValue, ActorComponent, ActorComponent, PPF_None);
 								}
@@ -1368,7 +1358,7 @@ FString UNativizationV2Subsystem::ConvertUStructToCppStructDeclaration(UStruct* 
 		}
 
 		FString PropertyType = UBlueprintNativizationLibrary::GetPropertyType(Property);
-		FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property, TArray<FGenerateFunctionStruct>());
+		FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
 
 		const FString Tooltip = Property->GetMetaData(TEXT("ToolTip"));
 		if (!Tooltip.IsEmpty())
@@ -1454,7 +1444,7 @@ void UNativizationV2Subsystem::PreloadAllNamesForObjects(TArray<UObject*> Object
 
 			for (TFieldIterator<FProperty> PropIt(Blueprint->GeneratedClass, EFieldIteratorFlags::ExcludeSuper); PropIt; ++PropIt)
 			{
-				UBlueprintNativizationLibrary::GetUniquePropertyName(*PropIt, LocalEntryNodes);
+				UBlueprintNativizationLibrary::GetUniquePropertyName(*PropIt);
 			}
 		}
 	}
@@ -1478,8 +1468,8 @@ void UNativizationV2Subsystem::GenerateInterfaceCode(UBlueprint* BlueprintInterf
 	);
 
 	HFileContent += FString::Format(
-		TEXT("class {0} {1}\n{\n    GENERATED_BODY()\n\npublic:\n"),
-		{ ModuleAPIName,UBlueprintNativizationLibrary::GetUniqueIInterfaceFieldName(InterfaceClass) }
+		TEXT("class {0} {1}\n{\n    GENERATED_BODY()\n\n"),
+		{ UBlueprintNativizationSettingsLibrary::GetModuleApiName() ,UBlueprintNativizationLibrary::GetUniqueIInterfaceFieldName(InterfaceClass) }
 	);
 
 	HFileContent += GenerateFunctionDeclarationsCode(InterfaceClass, true);
@@ -1560,7 +1550,7 @@ FString UNativizationV2Subsystem::GenerateHFileBlueprintCode(UBlueprint* Bluepri
 
 	HFileContent += FString::Format(
 		TEXT("UCLASS()\nclass {0} {1} : public {2}\n{\nGENERATED_BODY()\n\n"),
-		{ ModuleAPIName, ClassName, AllBaseClasses });
+		{ UBlueprintNativizationSettingsLibrary::GetModuleApiName(), ClassName, AllBaseClasses });
 
 	HFileContent += "public: \n";
 
@@ -1574,8 +1564,8 @@ FString UNativizationV2Subsystem::GenerateHFileBlueprintCode(UBlueprint* Bluepri
 	HFileContent += "\n";
 
 	HFileContent += GenerateVariableDeclarationBlueprintCode(Blueprint);
-	HFileContent += GenerateFunctionDeclarationsCode(Blueprint->GeneratedClass, false);
 	HFileContent += GenerateGlobalFunctionVariables(Blueprint);
+	HFileContent += GenerateFunctionDeclarationsCode(Blueprint->GeneratedClass, false);
 	HFileContent += "};";
 
 	HFileContent = UBlueprintNativizationDataLibrary::FormatNamespaceCodeStyle(HFileContent);
@@ -1706,18 +1696,7 @@ TSet<FString> UNativizationV2Subsystem::GenerateImportsDeclarationsHeaderCode(TS
 		}
 	}
 
-	TArray<UK2Node*> AnswerNodes;
-	for (FGenerateFunctionStruct EntryNode : EntryNodes)
-	{
-		TArray<UK2Node*> ExecNodes = UBlueprintNativizationLibrary::GetAllExecuteNodesInFunctionWithMacroSupported(EntryNode.Node, this);
-		TArray<UK2Node*> InputNodes = UBlueprintNativizationLibrary::GetAllInputNodes(ExecNodes, true);
-		ExecNodes.Append(InputNodes);
-
-		for (UK2Node* ExecNode : ExecNodes)
-		{
-			AnswerNodes.AddUnique(ExecNode);
-		}
-	}
+	TArray<UK2Node*> AnswerNodes = GetAllContextNodes();
 
 	for (UK2Node* ExecNode : AnswerNodes)
 	{
@@ -1854,18 +1833,7 @@ TSet<FString> UNativizationV2Subsystem::GenerateImportsDeclarationsCppCode(UBlue
 		}
 	}*/
 
-	TArray<UK2Node*> AnswerNodes;
-	for (FGenerateFunctionStruct EntryNode : EntryNodes)
-	{
-		TArray<UK2Node*> ExecNodes = UBlueprintNativizationLibrary::GetAllExecuteNodesInFunctionWithMacroSupported(EntryNode.Node, this);
-		TArray<UK2Node*> InputNodes = UBlueprintNativizationLibrary::GetAllInputNodes(ExecNodes, true);
-		ExecNodes.Append(InputNodes);
-
-		for (UK2Node* ExecNode : ExecNodes)
-		{
-			AnswerNodes.AddUnique(ExecNode);
-		}
-	}
+	TArray<UK2Node*> AnswerNodes = GetAllContextNodes();
 
 	for (UK2Node* ExecNode : AnswerNodes)
 	{
@@ -1957,6 +1925,10 @@ FString UNativizationV2Subsystem::GenerateConstructorCppCode(UBlueprint* Bluepri
 		{
 			continue;
 		}
+		if (CDOValueStr == "()")
+		{
+			continue;
+		}
 
 		if (!CDOValueStr.Equals(SuperValueStr))
 		{
@@ -1978,10 +1950,10 @@ FString UNativizationV2Subsystem::GenerateConstructorCppCode(UBlueprint* Bluepri
 			else
 			{
 				FString FixedValue = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property, LeftAllAssetRefInBlueprint, Property->ContainerPtrToValuePtr<void>(CDO));
-				FString CPPName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes);
+				FString CPPName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
 
 				FGetterAndSetterPropertyDescriptor OutGetterAndSetterDescriptorDesc;
-				if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByPropertyName(Property, OutGetterAndSetterDescriptorDesc))
+				if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(Property, OutGetterAndSetterDescriptorDesc))
 				{
 					if (!OutGetterAndSetterDescriptorDesc.SetterPropertyFunctionName.IsEmpty())
 					{
@@ -2108,10 +2080,10 @@ FString UNativizationV2Subsystem::GenerateConstructorCppCode(UBlueprint* Bluepri
 				else
 				{
 					FString FixedValue = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property, LeftAllAssetRefInBlueprint, Property->ContainerPtrToValuePtr<void>(ActorComponent));
-					FString PropName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes);
+					FString PropName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
 
 					FGetterAndSetterPropertyDescriptor OutGetterAndSetterDescriptorDesc;
-					if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByPropertyName(Property, OutGetterAndSetterDescriptorDesc))
+					if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(Property, OutGetterAndSetterDescriptorDesc))
 					{
 						if (!OutGetterAndSetterDescriptorDesc.SetterPropertyFunctionName.IsEmpty())
 						{
@@ -2126,6 +2098,17 @@ FString UNativizationV2Subsystem::GenerateConstructorCppCode(UBlueprint* Bluepri
 					
 				}
 			}
+		}
+	}
+
+	TArray<UK2Node*> AnswerNodes = GetAllContextNodes();
+
+	for (UK2Node* Node : AnswerNodes)
+	{
+		UTranslatorBPToCppObject* Translator = FindTranslatorForNode(Node);
+		if (Translator)
+		{
+			Content += Translator->GenerateConstruction(Node, "", this);
 		}
 	}
 
@@ -2149,7 +2132,7 @@ bool UNativizationV2Subsystem::GetIncludeFromField(UField* OwnerField, FString& 
 			PackagePath = PackagePath.Mid(ContentIndex + 8);
 		}
 
-		IncludePath = FString::Format(TEXT("#include \"{0}/{1}.h\""), { "BlueprintNativizationModule", *PackagePath});
+		IncludePath = FString::Format(TEXT("#include \"{0}/{1}.h\""), { UBlueprintNativizationSettingsLibrary::GetModuleName(), *PackagePath});
 		return true;
 	}
 	else
@@ -2196,6 +2179,23 @@ bool UNativizationV2Subsystem::GetIncludeFromField(UField* OwnerField, FString& 
 	return false;
 }
 
+TArray<UK2Node*> UNativizationV2Subsystem::GetAllContextNodes()
+{
+	TArray<UK2Node*> AnswerNodes;
+	for (FGenerateFunctionStruct EntryNode : EntryNodes)
+	{
+		TArray<UK2Node*> ExecNodes = UBlueprintNativizationLibrary::GetAllExecuteNodesInFunctionWithMacroSupported(EntryNode.Node, this);
+		TArray<UK2Node*> InputNodes = UBlueprintNativizationLibrary::GetAllInputNodes(ExecNodes, true);
+		ExecNodes.Append(InputNodes);
+
+		for (UK2Node* ExecNode : ExecNodes)
+		{
+			AnswerNodes.AddUnique(ExecNode);
+		}
+	}
+	return AnswerNodes;
+}
+
 
 TSet<FString> UNativizationV2Subsystem::GetInputParametersForEntryNode(UK2Node* Node)
 {
@@ -2210,7 +2210,7 @@ TSet<FString> UNativizationV2Subsystem::GetInputParametersForEntryNode(UK2Node* 
 			FProperty* Property = *It;
 			if (Property)
 			{
-				Parameters.Add(FString::Format(TEXT("{0} {1}"), { UBlueprintNativizationLibrary::GetPropertyType(Property), UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes) }));
+				Parameters.Add(FString::Format(TEXT("{0} {1}"), { UBlueprintNativizationLibrary::GetPropertyType(Property), UBlueprintNativizationLibrary::GetUniquePropertyName(Property) }));
 			}
 		}
 	}
@@ -2232,7 +2232,9 @@ FString UNativizationV2Subsystem::GenerateFunctionDeclarationsCode(TSubclassOf<U
 		return FString();
 	}
 
-	FString Content;
+	FString PublicContent;
+	FString ProtectedContent;
+	FString PrivateContent;
 
 	for (const FGenerateFunctionStruct& Entry : EntryNodes)
 	{
@@ -2267,9 +2269,12 @@ FString UNativizationV2Subsystem::GenerateFunctionDeclarationsCode(TSubclassOf<U
 		{
 			OriginalFunctionName = Entry.OriginalUFunction->GetFName();
 		}
+
+		FString Declaration;
+
 		if (UBlueprintNativizationSettingsLibrary::FindNativeByClassAndName(GeneratedClass, OriginalFunctionName.ToString(), OutNativeDesc))
 		{
-			Content += "virtual void " + OutNativeDesc.GetDeclarationSignature() + "; \n";
+			Declaration = FString::Printf(TEXT("virtual void %s; \n"), *OutNativeDesc.GetDeclarationSignature());
 		}
 		else
 		{
@@ -2278,7 +2283,7 @@ FString UNativizationV2Subsystem::GenerateFunctionDeclarationsCode(TSubclassOf<U
 
 			if (!ParentOriginalFunction)
 			{
-				Content += FString::Format(
+				Declaration = FString::Format(
 					TEXT(
 						"virtual void {1}({2});\n"
 					),
@@ -2293,48 +2298,48 @@ FString UNativizationV2Subsystem::GenerateFunctionDeclarationsCode(TSubclassOf<U
 			{
 				if (ParentOriginalFunction == Entry.OriginalUFunction)
 				{
-					if (VirtualDeclarationToZeroImplementation)
+					if (Entry.OriginalUFunction->HasAnyFunctionFlags(FUNC_Private))
 					{
-						Content += FString::Format(
+						Declaration = FString::Format(
 							TEXT(
 								"UFUNCTION({0})\n"
-								"{1} {2}({3});\n"
-								"virtual void {2}_Implementation({3}) = 0;\n"
+								"{1} {2}({3}){4};\n"
 							),
 							{
 								*Entry.FlagsString,
-								ReturnProperty ? UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : "void",
+								ReturnProperty ? UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : TEXT("void"),
 								*Entry.Name.ToString(),
-								*ParametersString
+								*ParametersString,
+								VirtualDeclarationToZeroImplementation ? " = 0" : ""
 							}
 						);
 					}
 					else
 					{
-						Content += FString::Format(
+						Declaration = FString::Format(
 							TEXT(
 								"UFUNCTION({0})\n"
 								"{1} {2}({3});\n"
-								"virtual void {2}_Implementation({3});\n"
+								"virtual void {2}_Implementation({3}) {4};\n"
 							),
 							{
 								*Entry.FlagsString,
-								ReturnProperty ? UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : "void",
+								ReturnProperty ? UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : TEXT("void"),
 								*Entry.Name.ToString(),
-								*ParametersString
+								*ParametersString,
+								VirtualDeclarationToZeroImplementation ? " = 0" : ""
 							}
 						);
 					}
-
 				}
 				else
 				{
-					Content += FString::Format(
+					Declaration = FString::Format(
 						TEXT(
 							"virtual {0} {1}_Implementation({2});\n"
 						),
 						{
-							ReturnProperty ? UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : "void",
+							ReturnProperty ? UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : TEXT("void"),
 							*Entry.Name.ToString(),
 							*ParametersString
 						}
@@ -2343,7 +2348,48 @@ FString UNativizationV2Subsystem::GenerateFunctionDeclarationsCode(TSubclassOf<U
 			}
 		}
 
-		Content += "\n";
+		Declaration += TEXT("\n");
+
+		if (!Entry.OriginalUFunction)
+		{
+			PublicContent += Declaration;
+		}
+		else
+		{
+			if (Entry.OriginalUFunction->HasAnyFunctionFlags(EFunctionFlags::FUNC_Public))
+			{
+				PublicContent += Declaration;
+			}
+			else if (Entry.OriginalUFunction->HasAnyFunctionFlags(EFunctionFlags::FUNC_Protected))
+			{
+				ProtectedContent += Declaration;
+			}
+			else
+			{
+				PrivateContent += Declaration;
+			}
+		}
+
+	}
+
+	FString Content;
+
+	if (!PublicContent.IsEmpty())
+	{
+		Content += TEXT("public:\n");
+		Content += PublicContent;
+	}
+
+	if (!ProtectedContent.IsEmpty())
+	{
+		Content += TEXT("protected:\n");
+		Content += ProtectedContent;
+	}
+
+	if (!PrivateContent.IsEmpty())
+	{
+		Content += TEXT("private:\n");
+		Content += PrivateContent;
 	}
 
 	return Content;
@@ -2389,7 +2435,7 @@ FString UNativizationV2Subsystem::GetFunctionFlagsString(UFunction* Function)
 	}
 	Flags.Add(FString::Format(TEXT("Category=\"{0}\""), { *Category }));
 
-	if(!Flags.Contains(TEXT("")))
+	if(!Flags.Contains(TEXT("")) && !Function->HasAnyFunctionFlags(FUNC_Private))
 	{
 		Flags.Add("BlueprintNativeEvent");
 	}
@@ -2480,7 +2526,7 @@ FString UNativizationV2Subsystem::GenerateDelegateMacroDeclarationBlueprintCode(
 		// Check if the property is a multicast delegate
 		if (FMulticastDelegateProperty* DelegateProp = CastField<FMulticastDelegateProperty>(Property))
 		{
-			FString DelegateName = UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProp, EntryNodes);
+			FString DelegateName = UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProp);
 			UFunction* SignatureFunction = DelegateProp->SignatureFunction;
 
 			if (!SignatureFunction)
@@ -2557,11 +2603,12 @@ FString UNativizationV2Subsystem::GenerateVariableDeclarationBlueprintCode(UBlue
 			continue;
 		}
 
+		FString PropertyType = UBlueprintNativizationLibrary::GetPropertyType(Property);
+		FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
+
 		FString Declaration;
 		if (FMulticastDelegateProperty* DelegateProp = CastField<FMulticastDelegateProperty>(Property))
 		{
-			FString DelegateType = Property->GetCPPType();
-			FString DelegateName = UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProp, EntryNodes);
 
 			FString FlagsString = TEXT("BlueprintAssignable"); 
 
@@ -2569,15 +2616,12 @@ FString UNativizationV2Subsystem::GenerateVariableDeclarationBlueprintCode(UBlue
 			Declaration = FString::Format(
 				TEXT("UPROPERTY({0})\n{1} {2};"),
 				{ *FlagsString,
-				  *DelegateType,
-				  *DelegateName }
+				  *PropertyType,
+				  *PropertyName }
 			);
 		}
 		else
 		{
-			FString PropertyType = UBlueprintNativizationLibrary::GetPropertyType(Property);
-			FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes);
-
 			FString FlagsString = GetPropertyFlagsString(Property);
 
 			Declaration = FString::Format(
@@ -2704,10 +2748,13 @@ FString UNativizationV2Subsystem::ProcessGraphsForCodeGeneration(UK2Node* Node)
 
 	FString FunctionName = *GenerateFunctionStruct.Name.ToString();
 	FString OriginalFunctionName;
+	bool PrivateFunction = false;
 	if (GenerateFunctionStruct.OriginalUFunction)
 	{
 		OriginalFunctionName = GenerateFunctionStruct.OriginalUFunction->GetName();
+		PrivateFunction = GenerateFunctionStruct.OriginalUFunction->HasAnyFunctionFlags(FUNC_Private);
 	}
+	
 	FFunctionDescriptor OutNativeDesc;
 	if (UBlueprintNativizationSettingsLibrary::FindNativeByClassAndName(Node->GetBlueprint()->GeneratedClass, OriginalFunctionName, OutNativeDesc))
 	{
@@ -2719,8 +2766,8 @@ FString UNativizationV2Subsystem::ProcessGraphsForCodeGeneration(UK2Node* Node)
 
 			if (FProperty* Property = UBlueprintNativizationLibrary::FindClosestPropertyByName(Properties, *BaseInputName))
 			{
-				DeclarationUniqueParameters.Add(FString::Format(TEXT("{0} {1}"), { UBlueprintNativizationLibrary::GetPropertyType(Property), UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes) }));
-				CallSuperUniqueParameters.Add(UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes));
+				DeclarationUniqueParameters.Add(FString::Format(TEXT("{0} {1}"), { UBlueprintNativizationLibrary::GetPropertyType(Property), UBlueprintNativizationLibrary::GetUniquePropertyName(Property) }));
+				CallSuperUniqueParameters.Add(UBlueprintNativizationLibrary::GetUniquePropertyName(Property));
 			}
 			else
 			{
@@ -2741,6 +2788,38 @@ FString UNativizationV2Subsystem::ProcessGraphsForCodeGeneration(UK2Node* Node)
 			}
 		);
 		Content += FString::Format(TEXT("Super::{0}({1}); \n"), { OutNativeDesc.FunctionName, *FString::Join(CallSuperUniqueParameters.Array(), TEXT(", "))});
+	}
+	else if (PrivateFunction)
+	{
+		TSet<FString> Parameters;
+
+		if (GenerateFunctionStruct.CustomParametersString.Num() > 0)
+		{
+			for (FString ParamString : GenerateFunctionStruct.CustomParametersString)
+			{
+				Parameters.Add(ParamString);
+			}
+		}
+		else
+		{
+			Parameters = GetInputParametersForEntryNode(Node);
+		}
+
+		FProperty* ReturnProperty = nullptr;
+
+		if (GenerateFunctionStruct.OriginalUFunction)
+		{
+			ReturnProperty = GenerateFunctionStruct.OriginalUFunction->GetReturnProperty();
+		}
+		Content = FString::Format(
+			TEXT("{0} {1}::{2}({3})\n{\n"),
+			{
+				ReturnProperty ? *UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) : TEXT("void"),
+				*UBlueprintNativizationLibrary::GetUniqueFieldName(Node->GetBlueprint()->GeneratedClass),
+				*FunctionName,
+				*FString::Join(Parameters.Array(), TEXT(", "))
+			}
+		);
 	}
 	else
 	{
@@ -2784,7 +2863,7 @@ FString UNativizationV2Subsystem::ProcessGraphsForCodeGeneration(UK2Node* Node)
 	}
 
 	TArray<FVisitedNodeStack> Nodes;
-	Content += GenerateCodeFromNode(Node, "None", Nodes, TArray<UK2Node*>());
+	Content += GenerateCodeFromNode(Node, "None", Nodes, TSet<FString>(), TArray<UK2Node*>());
 	while(Content.EndsWith("\n"))
 	{
 		Content = Content.Left(Content.Len()-1);
@@ -2849,7 +2928,7 @@ FString UNativizationV2Subsystem::GenerateGlobalFunctionVariables(UBlueprint* Bl
 				{
 					Content += FString::Format(TEXT("UPROPERTY(EditAnywhere, BlueprintReadWrite) \n {0} {1};\n"),
 						{ UBlueprintNativizationLibrary::GetPinType(BPVariableDescription.VarType, false),
-						UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes) });
+						UBlueprintNativizationLibrary::GetUniquePropertyName(Property) });
 				}
 
 			}
@@ -2882,15 +2961,7 @@ TArray<FGenerateFunctionStruct> UNativizationV2Subsystem::GenerateFunctionsEntry
 			GenerateFunctionStruct->OriginalUFunction = Function;
 			GenerateFunctionStruct->FlagsString = GetFunctionFlagsString(Function);
 		}
-		if (UK2Node_EnhancedInputAction* EnhancedInputAction = Cast<UK2Node_EnhancedInputAction>(K2Entry))
-		{
-			FName FunctionName = *FString::Format(TEXT("InpActEvt_{0}"), { *EnhancedInputAction->InputAction->GetName() });
-			GenerateFunctionStruct->Name = *UBlueprintNativizationLibrary::GetUniqueEntryNodeName(K2Entry, Result, FunctionName.ToString());
-		}
-		else
-		{
-			GenerateFunctionStruct->Name = *UBlueprintNativizationLibrary::GetUniqueEntryNodeName(K2Entry, Result, "");
-		}
+		GenerateFunctionStruct->Name = *UBlueprintNativizationLibrary::GetUniqueEntryNodeName(K2Entry, Result, "");
 	}
 
 	int32 CycleIndex = 0;
@@ -3010,11 +3081,11 @@ FString UNativizationV2Subsystem::GetDefaultValueAsLiteral(UEdGraphPin* Pin)
 */
 
 
-FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack)
+FGenerateResultStruct UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack)
 {
 	if (!Pin)
 	{
-		return TEXT("/* null pin */");
+		return FGenerateResultStruct(TEXT("/* null pin */"));
 	}
 
 	auto TrimUnderscores = [](FString S) -> FString
@@ -3044,8 +3115,8 @@ FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Nod
 			{
 				for (FConstructorPropertyDescriptor ConstructorPropertyDescriptor : OutNativeDesc.ConstructorProperties)
 				{
-					UEdGraphPin* OptimalPin = UBlueprintNativizationLibrary::FindOptimalPin(Pin->SubPins, ConstructorPropertyDescriptor.OriginalPropertyName);
-					Args.Add(GenerateInputParameterCodeForNode(Node, OptimalPin, 0, MacroStack));
+					UEdGraphPin* OptimalPin = UBlueprintNativizationLibrary::FindClosestPinByName(Pin->SubPins, ConstructorPropertyDescriptor.OriginalPropertyName);
+					Args.Add(GenerateInputParameterCodeForNode(Node, OptimalPin, 0, MacroStack).Code);
 				}
 
 				return FString::Format(TEXT("{0}({1})"), { PinCategory, FString::Join(Args, TEXT(", ")) });
@@ -3054,7 +3125,7 @@ FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Nod
 
 		for (UEdGraphPin* LocalPin : Pin->SubPins)
 		{
-			Args.Add(GenerateInputParameterCodeForNode(Node, LocalPin, 0, MacroStack));
+			Args.Add(GenerateInputParameterCodeForNode(Node, LocalPin, 0, MacroStack).Code);
 		}
 
 		return FString::Format(TEXT("{0}({1})"), { PinCategory, FString::Join(Args, TEXT(", ")) });
@@ -3062,7 +3133,7 @@ FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Nod
 
 	if (Pin->bHidden && !Pin->ParentPin)
 	{
-		return TEXT("");
+		return FGenerateResultStruct();
 	}
 
 	TArray<UK2Node*> LocalMacroStack = MacroStack;
@@ -3071,7 +3142,7 @@ FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Nod
 	if (ConnectedPin && ConnectedPin->Direction == EEdGraphPinDirection::EGPD_Output)
 	{
 		UK2Node* ConnectedNode = Cast<UK2Node>(ConnectedPin->GetOwningNode());
-		FString OutputCode = "";
+		FGenerateResultStruct OutputCode;
 
 		UTranslatorBPToCppObject* TranslatorObject = FindTranslatorForNode(ConnectedNode);
 
@@ -3095,7 +3166,7 @@ FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Nod
 						return FString::Format(TEXT("this, &{0}::{1}"), { "U" + UBlueprintNativizationLibrary::GetUniqueFieldName(Node->GetBlueprint()->GeneratedClass), UBlueprintNativizationLibrary::GetUniqueEntryNodeName(CustomEvent, EntryNodes, "")});
 					}
 				}
-				OutputCode = UBlueprintNativizationLibrary::GetUniquePropertyName(UBlueprintNativizationLibrary::GetPropertyFromEntryNode(ConnectedNode, *UBlueprintNativizationLibrary::GetParentPin(ConnectedPin)->GetName()), EntryNodes);
+				OutputCode = UBlueprintNativizationLibrary::GetUniquePropertyName(UBlueprintNativizationLibrary::GetPropertyFromEntryNode(ConnectedNode, *UBlueprintNativizationLibrary::GetParentPin(ConnectedPin)->GetName()));
 			}
 			else
 			{
@@ -3125,7 +3196,7 @@ FString UNativizationV2Subsystem::GenerateInputParameterCodeForNode(UK2Node* Nod
 			Value.RemoveFromStart(ParentName);
 			Value = Value.TrimStartAndEnd();
 			Value = TrimUnderscores(Value);
-			OutputCode += "." + Value;
+			OutputCode.Code += "." + Value;
 		}
 		return OutputCode;
 	}
@@ -3212,7 +3283,7 @@ TSet<FString> UNativizationV2Subsystem::GetAllUsedLocalGenerateFunctionParameter
 	return Result;
 }
 
-FString UNativizationV2Subsystem::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack)
+FString UNativizationV2Subsystem::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TSet<FString> Preparations, TArray<UK2Node*> MacroStack)
 {
 	if (!Node)
 	{
@@ -3251,7 +3322,7 @@ FString UNativizationV2Subsystem::GenerateCodeFromNode(UK2Node* Node, FString En
 	UTranslatorBPToCppObject* TranslatorObject = FindTranslatorForNode(Node);
 	if (IsValid(TranslatorObject))
 	{
-		Content += TranslatorObject->GenerateCodeFromNode(Node, EntryPinName, VisitedNodes, MacroStack, this);
+		Content += TranslatorObject->GenerateCodeFromNode(Node, EntryPinName, VisitedNodes, MacroStack, Preparations, this);
 		if (!TranslatorObject->CanContinueCodeGeneration(Node, EntryPinName))
 		{
 			return Content;
@@ -3276,7 +3347,7 @@ FString UNativizationV2Subsystem::GenerateCodeFromNode(UK2Node* Node, FString En
 			{
 				Content += "\n";
 			}
-			Content += GenerateCodeFromNode(NextNode, GraphPin->GetName(), VisitedNodes, LocalMacroStack);
+			Content += GenerateCodeFromNode(NextNode, GraphPin->GetName(), VisitedNodes, Preparations, LocalMacroStack);
 		}
 	}
 	//SimpleNodeEnd
@@ -3320,7 +3391,7 @@ FString UNativizationV2Subsystem::GenerateLocalVariablesCodeFromEntryNode(UK2Nod
 				else
 				{
 					FString FixedValue = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(BPVariableDescription.VarName.ToString(), BPVariableDescription.VarType, BPVariableDescription.DefaultValue, nullptr, LeftAllAssetRefInBlueprint);
-					FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes);
+					FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
 					FString PropertyType = UBlueprintNativizationLibrary::GetPropertyType(Property);
 
 					Content += FString::Format(TEXT("{0} {1} = {2} \n\n"), { PropertyType, PropertyName, FixedValue });

@@ -8,7 +8,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UPromotabaleOperatorTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UPromotabaleOperatorTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_PromotableOperator* PromotableOperator = Cast<UK2Node_PromotableOperator>(Node))
 	{
@@ -21,21 +21,7 @@ FString UPromotabaleOperatorTranslatorObject::GenerateInputParameterCodeForNode(
 
 		UEdGraphPin* MainPin = Pins[0];
 		Pins.RemoveAt(0);
-		const TArray<UEdGraphPin*> OtherPins = Pins;
-
 		const FName OperationName = PromotableOperator->GetOperationName();
-
-		auto GenerateCode = [&](const FString& Operator) -> FString
-			{
-				TArray<UK2Node*> LocalMacroStack = MacroStack;
-				FString Result = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, MainPin, 0, LocalMacroStack);
-				for (UEdGraphPin* GraphPin : OtherPins)
-				{
-					TArray<UK2Node*> LocalGraphPinMacroStack = MacroStack;
-					Result += Operator + NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, GraphPin, 0, LocalGraphPinMacroStack);
-				}
-				return Result;
-			};
 
 		const TMap<FName, FString> OperatorMap = {
 			{ "Add", "+" },
@@ -58,7 +44,17 @@ FString UPromotabaleOperatorTranslatorObject::GenerateInputParameterCodeForNode(
 
 		if (const FString* Operator = OperatorMap.Find(OperationName))
 		{
-			return GenerateCode(*Operator);
+			TArray<UK2Node*> LocalMacroStack = MacroStack;
+			FGenerateResultStruct Result = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, MainPin, 0, LocalMacroStack);
+
+			for (UEdGraphPin* GraphPin : Pins)
+			{
+				TArray<UK2Node*> LocalGraphPinMacroStack = MacroStack;
+				FGenerateResultStruct GraphPinGenerateResult = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, GraphPin, 0, LocalGraphPinMacroStack);
+				Result.Code = Result.Code + *Operator + GraphPinGenerateResult.Code;
+				Result.Preparations.Append(GraphPinGenerateResult.Preparations);
+			}
+			return Result;
 		}
 	}
 	return FString();

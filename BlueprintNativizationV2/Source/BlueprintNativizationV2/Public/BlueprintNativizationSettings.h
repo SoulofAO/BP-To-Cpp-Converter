@@ -107,15 +107,19 @@ struct FConstructorDescriptor
     UPROPERTY(EditAnywhere, Category = "ConstructorDescriptor")
     TArray<FConstructorPropertyDescriptor> ConstructorProperties;
 
+    UPROPERTY(EditAnywhere, Category = "ConstructorDescriptor")
+    bool bNeedToTransform = true;
+
     FConstructorDescriptor()
         : OriginalStructName(TEXT(""))
         , ConstructorProperties()
     {
     }
 
-    FConstructorDescriptor(const FString& InOriginalStructName, const TArray<FConstructorPropertyDescriptor>& InConstructorProperties)
+    FConstructorDescriptor(const FString& InOriginalStructName, const TArray<FConstructorPropertyDescriptor>& InConstructorProperties, bool bNewNeedToTransform = true)
         : OriginalStructName(InOriginalStructName)
         , ConstructorProperties(InConstructorProperties)
+        , bNeedToTransform(bNewNeedToTransform)
     {
     }
 };
@@ -192,14 +196,24 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Function Mapping")
     static bool FindNativeByClassAndName(UClass* OwnerClass, FString OwnerName, FFunctionDescriptor& OutNativeDesc);
 
+    UFUNCTION(BlueprintCallable, Category = "General")
+    static FString GetModuleApiName();
+
+    UFUNCTION(BlueprintCallable, Category = "General")
+    static FString GetModuleName();
+
     UFUNCTION(BlueprintCallable, Category = "Function Mapping")
     static bool FindNativeByBlueprint(const FFunctionDescriptor BlueprintDesc, FFunctionDescriptor& OutNativeDesc);
 
-    UFUNCTION(BlueprintCallable, Category = "General")
+    UFUNCTION(BlueprintCallable, Category = "Constructors")
     static bool FindConstructorDescriptorByStruct(UStruct* OwnerStruct, FConstructorDescriptor& OutNativeDesc);
 
-    static bool FindGetterAndSetterDescriptorDescriptorByPropertyName(FProperty* Property, FGetterAndSetterPropertyDescriptor & OutGetterAndSetterDescriptorDesc);
+    UFUNCTION(BlueprintCallable, Category = "Getter And Setter")
+    static bool FindGetterAndSetterDescriptorDescriptorByPropertyNameAndObject(FName PropertyOriginalName, UObject* Object, FGetterAndSetterPropertyDescriptor& OutGetterAndSetterDescriptorDesc);
 
+    static bool FindGetterAndSetterDescriptorDescriptorByProperty(FProperty* Property, FGetterAndSetterPropertyDescriptor & OutGetterAndSetterDescriptorDesc);
+
+    UFUNCTION(BlueprintCallable, Category = "ColorEditor")
     static bool FindColorByNameInColorTextGroup(FString Name, FLinearColor& LinearColor);
 };
 
@@ -232,40 +246,87 @@ public:
 
     virtual FName GetSectionName() const override { return TEXT("BlueprintNativizationV2PluginEditorSettings"); }
 
-
+    //The main source of translating Blueprint functions into C++ is translators. A translator serves one or more types of K2Node, and translates them into C++ code.
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<TSubclassOf<UTranslatorBPToCppObject>> TranslatorBPToCPPObjects;
 
+    //Some Visual Generale
     UPROPERTY(EditAnywhere, config, Category = "General|CodeEditor")
     TArray<FColorEditableKeywordGroup> ColorEditableTextGroups;
 
+    //Some Visual Generale
     UPROPERTY(EditAnywhere, config, Category = "General|CodeEditor")
     TArray<FString> ColorEditableTextOperators;
 
+    //Some Visual Generale
+    UPROPERTY(EditAnywhere, config, Category = "General|CodeEditor")
+    FLinearColor OperatorColor = FLinearColor(1.0, 0.5, 0.0);
+
+    //Some Visual Generale
+    UPROPERTY(EditAnywhere, config, Category = "General|CodeEditor")
+    FLinearColor IncludeColor = FLinearColor(1.0, 0.5, 0.0);
+
+    //Some Visual Generale
+    UPROPERTY(EditAnywhere, config, Category = "General|CodeEditor")
+    FLinearColor CommentsColor = FLinearColor(0.0, 1.0, 0.0);
+
+    //Global Variable Names are used to avoid name conflicts.
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<FString> GlobalVariableNames;
 
+    //The Setup Action Object is an object that links EU_NativizationTool to various helper Widgets on the Blueprint side and is best left alone.
     UPROPERTY(EditAnywhere, config, Category = "General")
     TSoftClassPtr<USetupActionObject> SetupActionObject;
 
+    //ModuleName to initialize and add Code
     UPROPERTY(EditAnywhere, config, Category = "General")
-    bool bEnableGenerateValueSuffix = true;
+    FString ModuleName = "BlueprintNativizationModule";
 
+    //Enable Generate Value Suffix controls whether all generated variables in C++ code will end with GeneratedValue. Better disable it, the code will be cleaner. 
+    UPROPERTY(EditAnywhere, config, Category = "General")
+    bool bEnableGenerateSuffix = false;
+
+    //Add BP Prefix To Parent Blueprint controls whether existing Blueprint classes will get the “BP_” prefix when rebuilding on C++ inheritors.
     UPROPERTY(EditAnywhere, config, Category = "General")
     bool bAddBPPrefixToReparentBlueprint = true;
 
+    /*
+    Function Redirects - a list of functions that are Blueprint Implemented.These functions do not have enough metadata to say which function calls it,
+    where it can be redefined in C++.This is what this array is for.It relates the name of the Blueprint Implemented and the original C++ function.
+    */
     UPROPERTY(EditAnywhere, Category = "General")
     TArray<FFunctionBinding> FunctionRedirects;
 
+    /*
+    Construction Descriptors - to constructors of structures, where using a constructor for initialization is the most “correct” option. In other cases, direct setting of values via '.' is used, that is, instead of, for example, FLinearColor(0.0,0.66,1.0,1.0), FLinearColor LinearColor() will be generated;
+    LinearColor.R = 1.0; 
+    LinearColor.G = 1.0; etc. 
+    Also implemented due to the lack of reflection for this. For structures generated in Blueprints, their full constructor is implemented by default.
+    */
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<FConstructorDescriptor> ConstructorDescriptors;
 
+    /*
+    Ignore Class to Ref Generate. 
+    This includes all classes that should not be nativized. 
+    Typically, this is UI, Widget, etc. Do not change this widget and try to generate C++ for UI, this will lead to a crash.
+    */
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<TSoftClassPtr<UObject>> IgnoreClassToRefGenerate;
 
+    //This includes all assets that should not be nativized. 
     UPROPERTY(EditAnywhere, Category = "General")
     TArray<TSoftObjectPtr<UObject>> IgnoreAssetsToRefGenerate;
 
+    //If the class cannot be activated, call the Blueprint functions directly.
+    UPROPERTY(EditAnywhere, config, Category = "General")
+    bool bReplaceCallToIgnoreAssetsToDirectBlueprintCall = false;
+
+    /*
+    Getter And Setter Description. 
+    FProperty do not contain information about the privacy - publicity of variables. This leads to the fact that access to a superior object can cause a crash due to lack of access to the variable.
+    For this, there is a list where variables are presented with a function to perform an operation, such as Get Set or completely ignore the variable.
+    */
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<FGetterAndSetterPropertyDescriptor> GetterAndSetterDescriptors;
 };

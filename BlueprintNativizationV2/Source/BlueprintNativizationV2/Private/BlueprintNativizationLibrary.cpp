@@ -46,7 +46,7 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Subsystems/EditorAssetSubsystem.h"
 #include "EditorUtilitySubsystem.h"
-
+#include "K2Node_ComponentBoundEvent.h"
 
 FString UBlueprintNativizationLibrary::GetFunctionNameByEntryNode(UEdGraphNode* EntryNode)
 {
@@ -80,10 +80,12 @@ FString UBlueprintNativizationLibrary::GetFunctionNameByInstanceNode(UK2Node* No
 
 UK2Node* UBlueprintNativizationLibrary::FindEntryNodeByFunctionName(UBlueprint* Blueprint, const FName& TargetNodeName)
 {
+	if (!Blueprint) return nullptr;
+
 	TArray<UEdGraph*> Graphs;
 	Blueprint->GetAllGraphs(Graphs);
 
-	for (UEdGraph* Graph : Graphs)  
+	for (UEdGraph* Graph : Graphs)
 	{
 		if (!Graph) continue;
 
@@ -91,46 +93,56 @@ UK2Node* UBlueprintNativizationLibrary::FindEntryNodeByFunctionName(UBlueprint* 
 
 		for (UK2Node* EntryNode : EntryNodes)
 		{
-			if (UK2Node_FunctionEntry* FunctionEntry = Cast<UK2Node_FunctionEntry>(EntryNode))
-			{
-				if (FunctionEntry->GetGraph()->GetFName() == TargetNodeName)
-				{
-					return FunctionEntry;
-				}
-			}
-			if (UK2Node_Event* CustomEvent = Cast<UK2Node_Event>(EntryNode))
-			{
-				FName Name = CustomEvent->GetFunctionName();
+			if (!EntryNode) continue;
 
-				if (Name == TargetNodeName)
-				{
-					return CustomEvent;
-				}
-			}
-			if (UK2Node_Tunnel* K2Node_Tunnel = Cast<UK2Node_Tunnel>(EntryNode))
+			FName EntryName = GetEntryFunctionNameByNode(EntryNode);
+			if (EntryName == TargetNodeName)
 			{
-				if (!K2Node_Tunnel->bCanHaveInputs)
-				{
-					FString Name = Graph->GetName();
-					if (Name == TargetNodeName)
-					{
-						return K2Node_Tunnel;
-					}
-				}
-			}
-			if (UK2Node_EnhancedInputAction* EnhancedInputAction = Cast<UK2Node_EnhancedInputAction>(EntryNode))
-			{
-				FName FunctionName = *FString::Format(TEXT("InpActEvt_{0}_{1}"), { *EnhancedInputAction->InputAction->GetName(), *EnhancedInputAction->GetName() });
-
-				if (FunctionName == TargetNodeName)
-				{
-					return EnhancedInputAction;
-				}
+				return EntryNode;
 			}
 		}
 	}
 
 	return nullptr;
+}
+
+
+TArray<FName> UBlueprintNativizationLibrary::GetAllBlueprintCallableNames(UBlueprint* Blueprint, bool bRemoveAllMacro, bool bUseDisplayName)
+{
+	TArray<FName> Result;
+
+	if (!Blueprint) return Result;
+
+	TArray<UEdGraph*> Graphs;
+
+	Graphs.Append(Blueprint->UbergraphPages);
+	Graphs.Append(Blueprint->FunctionGraphs);
+
+	if (!bRemoveAllMacro)
+	{
+		Graphs.Append(Blueprint->MacroGraphs);
+	}
+
+	for (UEdGraph* Graph : Graphs)
+	{
+		if (!Graph) continue;
+
+		TArray<UK2Node*> EntryNodes = GetEntryNodesPerGraph(Graph, !bRemoveAllMacro);
+
+		if (EntryNodes.Num() > 0 && EntryNodes[0])
+		{
+			for (UK2Node* EntryNode : EntryNodes)
+			{
+				Result.Add(GetEntryFunctionNameByNode(EntryNode));
+			}
+		}
+		else
+		{
+			Result.Add(Graph->GetFName());
+		}
+	}
+
+	return Result;
 }
 
 UFunction* UBlueprintNativizationLibrary::FindFunctionByFunctionName(UBlueprint* Blueprint, const FName& TargetNodeName)
@@ -497,28 +509,26 @@ TArray<UK2Node*> UBlueprintNativizationLibrary::GetAllInputNodes(TArray<UK2Node*
 	return Nodes;
 }
 
-UEdGraphPin* UBlueprintNativizationLibrary::FindOptimalPin(const TArray<UEdGraphPin*>& SubPins, const FString& OriginalPropertyName)
+UEdGraphPin* UBlueprintNativizationLibrary::FindClosestPinByName(const TArray<UEdGraphPin*>& Pins,const FString& OriginalName, int32 MinScore /* = -1 */)
 {
 	UEdGraphPin* BestPin = nullptr;
 	int32 BestScore = TNumericLimits<int32>::Max();
 
-	if (OriginalPropertyName.IsEmpty())
+	if (OriginalName.IsEmpty())
 	{
-		for (UEdGraphPin* Pin : SubPins)
-		{
-			if (Pin) return Pin;
-		}
 		return nullptr;
 	}
 
-	for (UEdGraphPin* LocalPin : SubPins)
+	for (UEdGraphPin* LocalPin : Pins)
 	{
 		if (!LocalPin)
+		{
 			continue;
+		}
 
 		const FString PinName = LocalPin->PinName.ToString();
-		int32 Distance = LevenshteinDistance_FString(PinName, OriginalPropertyName);
-		const int32 ContainBonus = PinName.Contains(OriginalPropertyName) ? (OriginalPropertyName.Len() * 10) : 0;
+		int32 Distance = LevenshteinDistance_FString(PinName, OriginalName);
+		const int32 ContainBonus = PinName.Contains(OriginalName) ? (OriginalName.Len() * 10) : 0;
 		int32 Score = Distance - ContainBonus;
 
 		if (Score < BestScore)
@@ -528,8 +538,14 @@ UEdGraphPin* UBlueprintNativizationLibrary::FindOptimalPin(const TArray<UEdGraph
 		}
 	}
 
+	if (MinScore!= -1 && BestPin && BestScore > MinScore)
+	{
+		return nullptr;
+	}
+
 	return BestPin;
 }
+
 
 void UBlueprintNativizationLibrary::CloseTabsWithSpecificAssets(TArray<UObject*>& Assets)
 {
@@ -758,7 +774,7 @@ FString UBlueprintNativizationLibrary::GetUniqueFunctionName(UFunction* Function
 	return FString();
 }
 
-FString UBlueprintNativizationLibrary::GetUniquePropertyName(FProperty* Property, TArray<FGenerateFunctionStruct> EntryNodes)
+FString UBlueprintNativizationLibrary::GetUniquePropertyName(FProperty* Property)
 {
 	UBlueprintNativizationUniqueNameSubsystem* Subsystem = GEngine->GetEngineSubsystem<UBlueprintNativizationUniqueNameSubsystem>();
 	if (Subsystem)
@@ -843,7 +859,7 @@ TArray<FName> UBlueprintNativizationLibrary::GetAllPropertyNamesByStruct(UScript
 	return PropertyNames;
 }
 
-FName UBlueprintNativizationLibrary::GetOriginalFunctionNameByNode(UK2Node* Node)
+FName UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(UK2Node* Node)
 {
 	if (!Node)
 	{
@@ -853,12 +869,22 @@ FName UBlueprintNativizationLibrary::GetOriginalFunctionNameByNode(UK2Node* Node
 	UBlueprint* Blueprint = Node->GetBlueprint();
 	if (!Blueprint)
 	{
-		return Node->GetFName();
+		return NAME_None;
 	}
 
 	UClass* TargetClass = Blueprint->GeneratedClass
 		? Blueprint->GeneratedClass
 		: Blueprint->SkeletonGeneratedClass;
+
+	if (UK2Node_ComponentBoundEvent* ComponentBoundEvent = Cast<UK2Node_ComponentBoundEvent>(Node))
+	{
+		FName PropertyName = ComponentBoundEvent->GetComponentPropertyName();
+		FName DelegateName = ComponentBoundEvent->DelegatePropertyName;
+		return *FString::Format(TEXT("On{0}{1}"), {
+			*PropertyName.ToString(),
+			*DelegateName.ToString()
+			});
+	}
 
 	if (UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node))
 	{
@@ -892,7 +918,7 @@ FName UBlueprintNativizationLibrary::GetOriginalFunctionNameByNode(UK2Node* Node
 		return FName(FunctionEntry->FunctionReference.GetMemberName());
 	}
 
-	return Node->GetFName();
+	return NAME_None;
 }
 UEditorUtilityWidget* UBlueprintNativizationLibrary::OpenEditorUtilityWidget(UEditorUtilityWidgetBlueprint* WidgetBlueprint)
 {
@@ -1089,23 +1115,18 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
 		{
 			if (LeftAllAssetRefInBlueprint)
 			{
-				return "nullptr /*Asset. Should Replace in Blueprint*/ ";
+				return FString(TEXT("nullptr"));
 			}
 			else
 			{
-				
-				FString AssetPath =  FSoftObjectPath(ClassObj).ToString();
-				FString Content = FString::Printf(
-					TEXT("ConstructorHelpers::FClassFinder<%s>(TEXT(\"%s\")).Class"),
-					*UBlueprintNativizationLibrary::GetUniqueFieldName(ClassProperty->MetaClass), *AssetPath);
-
-				return Content;
+				FString AssetPath = FSoftObjectPath(ClassObj).ToString();
+				return FString::Format(TEXT("LoadClass<{0}>(nullptr, TEXT(\"{1}\"))"),
+					TArray<FStringFormatArg>{ FStringFormatArg(UBlueprintNativizationLibrary::GetUniqueFieldName(ClassProperty->MetaClass)), FStringFormatArg(AssetPath) });
 			}
-			
 		}
 		else
 		{
-			return "nullptr";
+			return FString(TEXT("nullptr"));
 		}
 	}
 	else if (FObjectPropertyBase* ObjectPropertyBase = CastField<FObjectPropertyBase>(Property))
@@ -1115,23 +1136,21 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
 		{
 			if (LeftAllAssetRefInBlueprint)
 			{
-				return "nullptr /*Asset. Should Replace in Blueprint*/";
+				return FString(TEXT("nullptr"));
 			}
 			else
 			{
 				FString AssetPath = FSoftObjectPath(Object).ToString();
-				FString Content = FString::Printf(
-					TEXT("ConstructorHelpers::FObjectFinder<%s>(TEXT(\"%s\")).Object"),
-					*UBlueprintNativizationLibrary::GetUniqueFieldName(Object->GetClass()), *AssetPath);
-
-				return Content;
+				return FString::Format(TEXT("LoadObject<{0}>(nullptr, TEXT(\"{1}\"))"),
+					TArray<FStringFormatArg>{ FStringFormatArg(UBlueprintNativizationLibrary::GetUniqueFieldName(Object->GetClass())), FStringFormatArg(AssetPath) });
 			}
 		}
 		else
 		{
-			return "nullptr";
+			return FString(TEXT("nullptr"));
 		}
 	}
+
 	else if (FStrProperty* StrProp = CastField<FStrProperty>(Property))
 	{
 		return FString::Format(TEXT("TEXT({0})"), { StrProp->GetPropertyValue(PropertyAddress) });
@@ -1295,7 +1314,7 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
 		}
 		else
 		{
-			StructName = PrefixComponentName + UBlueprintNativizationLibrary::GetUniquePropertyName(Property, EntryNodes);
+			StructName = PrefixComponentName + UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
 		}
 		for (TFieldIterator<FProperty> It(StructProperty->Struct); It; ++It)
 		{
@@ -1645,6 +1664,17 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 			return (Str.Len() > 1) ? Str.Mid(1, Str.Len() - 2) : FString();
 		};
 
+
+	auto RemoveBrackets = [](const FString& Input) -> FString
+		{
+			if (Input.StartsWith(TEXT("(")) && Input.EndsWith(TEXT(")")) && Input.Len() >= 2)
+			{
+				return Input.Mid(1, Input.Len() - 2);
+			}
+			return Input;
+		};
+
+
 	if (Type.IsArray())
 	{
 		TArray<FString> Tokens;
@@ -1748,24 +1778,23 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 		{
 			if (LeftAllAssetRefInBlueprint)
 			{
-				return "nullptr";
+				return FString(TEXT("nullptr"));
 			}
 			else
 			{
 				FString AssetPath = FSoftObjectPath(DefaultObject).ToString();
-				return FString::Printf(
-					TEXT("ConstructorHelpers::FObjectFinder<%s>(TEXT(\"%s\")).Object"),
-					*UBlueprintNativizationLibrary::GetUniqueFieldName(DefaultObject->GetClass()), *AssetPath);
+				return FString::Format(TEXT("LoadObject<{0}>(nullptr, TEXT(\"{1}\"))"),
+					TArray<FStringFormatArg>{ FStringFormatArg(UBlueprintNativizationLibrary::GetUniqueFieldName(DefaultObject->GetClass())), FStringFormatArg(AssetPath) });
 			}
 		}
 
 		if (Type.PinSubCategory == "self" || Name == "self")
 		{
-			return "";
+			return FString(TEXT(""));
 		}
 		else
 		{
-			return Text.IsEmpty() ? "nullptr" : Text;
+			return Text.IsEmpty() ? FString(TEXT("nullptr")) : Text;
 		}
 	}
 	else if (Type.PinCategory == UEdGraphSchema_K2::PC_Class || Type.PinCategory == UEdGraphSchema_K2::PC_SoftClass)
@@ -1779,19 +1808,19 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 		{
 			if (LeftAllAssetRefInBlueprint)
 			{
-				return "nullptr";
+				return FString(TEXT("nullptr"));
 			}
 			else
 			{
 				FString AssetPath = FSoftObjectPath(DefaultObject).ToString();
-				return FString::Printf(
-					TEXT("ConstructorHelpers::FClassFinder<%s>(TEXT(\"%s\")).Class"),
-					*UBlueprintNativizationLibrary::GetUniqueFieldName(DefaultObject->GetClass()), *AssetPath);
+				return FString::Format(TEXT("LoadClass<{0}>(nullptr, TEXT(\"{1}\"))"),
+					TArray<FStringFormatArg>{ FStringFormatArg(UBlueprintNativizationLibrary::GetUniqueFieldName(DefaultObject->GetClass())), FStringFormatArg(AssetPath) });
 			}
 		}
 
-		return Text.IsEmpty() ? "nullptr" : Text;
+		return Text.IsEmpty() ? FString(TEXT("nullptr")) : Text;
 	}
+
 
 	else if (Type.PinCategory == UEdGraphSchema_K2::PC_Enum)
 	{
@@ -1825,7 +1854,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 			}
 			else
 			{
-				return Text;
+				return "0";
 			}
 		}
 		else
@@ -1845,7 +1874,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 		TArray<FName> PropertyNames = GetAllPropertyNamesByStruct(Struct);
 		TArray<FString> Args;
 		int Count = 0;
-		DefaultValue = TrimFirstAndLast(DefaultValue);
+		DefaultValue = RemoveBrackets(DefaultValue);
 
 		for (FName PropertyName : PropertyNames)
 		{
@@ -3192,16 +3221,7 @@ TSet<UObject*> UBlueprintNativizationLibrary::GetAllDependencies(UObject* InputT
 					{
 						if (UClass* Class = Cast<UBlueprint>(Dep)->GeneratedClass)
 						{
-							bool SucsessFoundIgnoreClass = false;
-							for (TSubclassOf<UObject> IgnoreClass : IgnoreClasses)
-							{
-								if (Class->IsChildOf(IgnoreClass) || Class == IgnoreClass)
-								{
-									SucsessFoundIgnoreClass = true;
-									break;
-								}
-							}
-							if (SucsessFoundIgnoreClass)
+							if (HasAnyChildInClasses(Class, IgnoreClasses))
 							{
 								continue;
 							}
@@ -3216,6 +3236,46 @@ TSet<UObject*> UBlueprintNativizationLibrary::GetAllDependencies(UObject* InputT
 	}
 
 	return AllCollectedObjects;
+}
+
+bool UBlueprintNativizationLibrary::HasAnyChildInClasses(UClass* Class, TArray<TSubclassOf<UObject>> Classes)
+{
+	bool SucsessFoundIgnoreClass = false;
+	for (TSubclassOf<UObject> CheckClass : Classes)
+	{
+		if (Class->IsChildOf(CheckClass) || Class == CheckClass)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+
+bool UBlueprintNativizationLibrary::HasAnyChildInClasses(UClass* Class, TArray<UClass*> Classes)
+{
+	bool SucsessFoundIgnoreClass = false;
+	for (TSubclassOf<UObject> CheckClass : Classes)
+	{
+		if (Class->IsChildOf(CheckClass) || Class == CheckClass)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UBlueprintNativizationLibrary::HasAnyChildInClasses(UClass* Class, TArray<TSoftClassPtr<UObject>> Classes)
+{
+	bool SucsessFoundIgnoreClass = false;
+	for (TSoftClassPtr<UObject> CheckClass : Classes)
+	{
+		if (Class->IsChildOf(CheckClass.Get()) || Class == CheckClass.Get())
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 
@@ -3413,19 +3473,52 @@ FString UBlueprintNativizationLibrary::GetUniquePropertyComponentGetterName(UAct
 	if (AnswerProperty)
 	{
 		FGetterAndSetterPropertyDescriptor OutGetterAndSetterDescriptorDesc;
-		if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByPropertyName(AnswerProperty, OutGetterAndSetterDescriptorDesc))
+		if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(AnswerProperty, OutGetterAndSetterDescriptorDesc))
 		{
 			return OutGetterAndSetterDescriptorDesc.GetterPropertyFunctionName + "()";
 		}
 		else
 		{
-			return GetUniquePropertyName(AnswerProperty, EntryNodes);
+			return GetUniquePropertyName(AnswerProperty);
 		}
 	}
 	else
 	{
 		return ActorComponent->GetName();
 	}
+}
+
+UActorComponent* UBlueprintNativizationLibrary::GetComponentByPropertyName(FString PropertyName, UBlueprint* Blueprint)
+{
+	USCS_Node* Node = FindSCSNodeForPropertyName(PropertyName, Blueprint);
+	if (Node)
+	{
+		if (UBlueprintGeneratedClass* BPClass = Cast<UBlueprintGeneratedClass>(Blueprint->GeneratedClass))
+		{
+			return Node->GetActualComponentTemplate(BPClass);
+		}
+	}
+	else
+	{
+		for (TFieldIterator<FProperty> PropIt(Blueprint->GeneratedClass); PropIt; ++PropIt)
+		{
+			FProperty* Property = *PropIt;
+
+			if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Property))
+			{
+				if (ObjProp->PropertyClass->IsChildOf(UActorComponent::StaticClass()))
+				{
+					UActorComponent* PropComponent = Cast<UActorComponent>(ObjProp->GetObjectPropertyValue_InContainer(Blueprint->GeneratedClass->GetDefaultObject()));
+					if (PropertyName == Property->GetName())
+					{
+						return PropComponent;
+					}
+				}
+			}
+		}
+	}
+
+	return nullptr;
 }
 
 
@@ -3455,6 +3548,27 @@ USCS_Node* UBlueprintNativizationLibrary::FindSCSNodeForComponent(UActorComponen
 			for (USCS_Node* NodeItr : AllSCSNodes)
 			{
 				if (NodeItr->GetActualComponentTemplate(BPClass) == ActorComponent)
+				{
+					return NodeItr;
+				}
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+USCS_Node* UBlueprintNativizationLibrary::FindSCSNodeForPropertyName(FString PropertyName, UBlueprint* Blueprint)
+{
+
+	if (UBlueprintGeneratedClass* BPClass = Cast<UBlueprintGeneratedClass>(Blueprint->GeneratedClass))
+	{
+		if (BPClass->SimpleConstructionScript)
+		{
+			const TArray<USCS_Node*>& AllSCSNodes = BPClass->SimpleConstructionScript->GetAllNodes();
+			for (USCS_Node* NodeItr : AllSCSNodes)
+			{
+				if (NodeItr->GetVariableName() == PropertyName)
 				{
 					return NodeItr;
 				}

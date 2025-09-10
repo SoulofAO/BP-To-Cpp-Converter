@@ -25,14 +25,13 @@ bool UBreakStructTranslatorObject::CanApply(UK2Node* Node)
     return false;
 }
 
-FString UBreakStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UBreakStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
     if (UK2Node_BreakStruct* BreakStruct = Cast<UK2Node_BreakStruct>(Node))
     {
         TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input, EPinExcludeFilter::None, EPinIncludeOnlyFilter::None);
 
-        FString OutputCode;
-        OutputCode = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack);
+        FGenerateResultStruct GenerateInputCodeStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack);
 
         TArray<UEdGraphPin*> PathPins = UBlueprintNativizationLibrary::GetParentPathPins(Pin);
         Algo::Reverse(PathPins);
@@ -41,12 +40,12 @@ FString UBreakStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node*
         {
             FProperty* Property = BreakStruct->StructType->FindPropertyByName(*CheckPin->GetName());
             FText Text = Property->GetDisplayNameText();
-            OutputCode += "." + UBlueprintNativizationLibrary::GetUniquePropertyName(Property, NativizationV2Subsystem->EntryNodes);
+            GenerateInputCodeStruct.Code += "." + UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
             CheckPin = CheckPin->ParentPin;
         }
 
-        return OutputCode;
+        return GenerateInputCodeStruct;
     }
-    return "";
+    return FGenerateResultStruct();
 }
 

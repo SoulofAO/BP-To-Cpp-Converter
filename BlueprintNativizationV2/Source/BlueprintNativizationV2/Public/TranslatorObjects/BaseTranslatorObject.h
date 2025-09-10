@@ -37,11 +37,10 @@ public:
 
     virtual FString GenerateConstruction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
-    virtual FString GenerateConstructionVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
-
     virtual FString GenerateSetupPlayerInputComponentFunction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem) { return ""; };
+    //ѕр€ма€ генераци€.
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
     //≈сли да, то продолжит последовательную генерацию дл€ всех локальных Exec пинов в Out направлении. ¬ключена по умолчанию и должнв быть включена дл€ всех нод, которые не затрагивают контроль исполнени€ и не латенны.
     virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName);
@@ -52,7 +51,8 @@ public:
 
     virtual TSet<FString> GenerateCSPrivateDependencyModuleNames(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem);
 
-    virtual FString GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
+    //ќбратна€ генераци€.
+    virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
 
     //«апрещает дальнейшие попытки обработку системами PinSplit. ѕолезно только в случае, когда пин уже распаршен и имеет нестандартный механизм сплитинга (как, например, в Enhance).
     virtual bool CanContinueGenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
@@ -61,6 +61,8 @@ protected:
     virtual FString GenerateLocalFunctionVariablesToHeaderVariables(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem);
 
     virtual TSet<FString> GenerateLocalFunctionVariables(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem);
+
+    virtual FString GenerateNewPreparations(TSet<FString> OldPreparations, TSet<FString> NewPreparations);
 
 public:
     virtual bool CanApply(UK2Node* Node);

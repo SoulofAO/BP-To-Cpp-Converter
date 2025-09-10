@@ -8,7 +8,7 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 
-FString URemoveDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString URemoveDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
     if (UK2Node_RemoveDelegate* RemoveDelegate = Cast<UK2Node_RemoveDelegate>(Node))
     {
@@ -16,8 +16,12 @@ FString URemoveDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FSt
         if (DelegateProperty)
         {
             TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input,  EPinExcludeFilter::None, EPinIncludeOnlyFilter::DelegatePin);
-			return UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProperty, 
-                NativizationV2Subsystem->EntryNodes) + TEXT("->RemoveDynamic(") + NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack) + ");";
+            FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack);
+            FString Content;
+			Content += GenerateNewPreparations(Preparations, GenerateResultStruct.Preparations);
+			Preparations.Append(GenerateResultStruct.Preparations);
+            Content += UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProperty) + TEXT("->RemoveDynamic(") + GenerateResultStruct.Code + ");";
+            return Content;
         }
     }
 	return FString();

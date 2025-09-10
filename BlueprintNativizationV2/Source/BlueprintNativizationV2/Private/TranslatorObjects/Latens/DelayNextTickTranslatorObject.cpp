@@ -29,7 +29,7 @@ void UDelayNextTickTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TAr
 	}
 }
 
-FString UDelayNextTickTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UDelayNextTickTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetParentPins(UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin));
 

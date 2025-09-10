@@ -13,44 +13,60 @@
 FString UMoveComponentToTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 	FString EntryPinName,
 	TArray<FVisitedNodeStack> VisitedNodes,
-	TArray<UK2Node*> MacroStack,
-	UNativizationV2Subsystem* NativizationV2Subsystem)
+	TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
+	FString Content;
+
 	if (EntryPinName == "Move")
 	{
-		FString TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
-		FString TargetRelativeLocation = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "TargetRelativeLocation"), 0, MacroStack);
-		FString TargetRelativeRotation = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "TargetRelativeRotation"), 0, MacroStack);
-		FString bEaseOut = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "bEaseOut"), 0, MacroStack);
-		FString bEaseIn = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "bEaseIn"), 0, MacroStack);
-		FString OverTime = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "OverTime"), 0, MacroStack);
-		FString ForceShortestRotationPath = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "bForceShortestRotationPath"), 0, MacroStack);
+		TSet<FString>  NewPreparations;
+		FGenerateResultStruct TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
+		FGenerateResultStruct TargetRelativeLocation = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "TargetRelativeLocation"), 0, MacroStack);
+		FGenerateResultStruct TargetRelativeRotation = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "TargetRelativeRotation"), 0, MacroStack);
+		FGenerateResultStruct bEaseOut = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "bEaseOut"), 0, MacroStack);
+		FGenerateResultStruct bEaseIn = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "bEaseIn"), 0, MacroStack);
+		FGenerateResultStruct OverTime = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "OverTime"), 0, MacroStack);
+		FGenerateResultStruct ForceShortestRotationPath = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "bForceShortestRotationPath"), 0, MacroStack);
 
-		return FString::Format(
+
+		NewPreparations.Append(TargetComponent.Preparations);
+		NewPreparations.Append(TargetRelativeLocation.Preparations);
+		NewPreparations.Append(TargetRelativeRotation.Preparations);
+		NewPreparations.Append(bEaseOut.Preparations);
+		NewPreparations.Append(bEaseIn.Preparations);
+		NewPreparations.Append(OverTime.Preparations);
+		NewPreparations.Append(ForceShortestRotationPath.Preparations);
+
+		Content += GenerateNewPreparations(Preparations, NewPreparations);
+		Preparations.Append(NewPreparations);
+		Content += FString::Format(
 			TEXT("GetWorld()->GetSubsystem<UMoveComponentSubsystem>()->EnqueueMove({0}, {1}, {2}, {3}, {4}, {5}, {6});"),
-			{ TargetComponent, TargetRelativeLocation, TargetRelativeRotation, OverTime, bEaseOut, bEaseIn, ForceShortestRotationPath }
-		);
+			{ TargetComponent.Code, TargetRelativeLocation.Code, TargetRelativeRotation.Code, OverTime.Code, bEaseOut.Code, bEaseIn.Code, ForceShortestRotationPath.Code});
+
 	}
 	else if (EntryPinName == "Stop")
 	{
-		FString TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
+		FGenerateResultStruct TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
 
-		return FString::Format(
+		Content += GenerateNewPreparations(Preparations, TargetComponent.Preparations);
+		Content += FString::Format(
 			TEXT("GetWorld()->GetSubsystem<UMoveComponentSubsystem>()->Stop({0});"),
-			{ TargetComponent }
+			{ TargetComponent.Code }
 		);
+
 	}
 	else if (EntryPinName == "Return")
 	{
-		FString TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
+		FGenerateResultStruct TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
 
-		return FString::Format(
+		Content += GenerateNewPreparations(Preparations, TargetComponent.Preparations);
+		Content += FString::Format(
 			TEXT("GetWorld()->GetSubsystem<UMoveComponentSubsystem>()->Return({0});"),
-			{ TargetComponent }
+			{ TargetComponent.Code }
 		);
 	}
 
-	return TEXT("");
+	return Content;
 }
 
 void UMoveComponentToTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path, TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* NativizationV2Subsystem)

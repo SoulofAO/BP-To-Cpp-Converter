@@ -8,7 +8,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UForLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UForLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
     FString Content;
 
@@ -36,9 +36,16 @@ FString UForLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString En
             UEdGraphPin* FirstIndexPin = MacroNode->FindPin(TEXT("FirstIndex"));
             UEdGraphPin* LastIndexPin = MacroNode->FindPin(TEXT("LastIndex"));
             UEdGraphPin* LoopBodyPin = MacroNode->FindPin(TEXT("LoopBody"));
+            
+            TSet<FString> LocalPreparations;
 
-            FString FirstIndex = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, FirstIndexPin, 0, MacroStack);
-            FString LastIndex = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, LastIndexPin, 0, MacroStack);
+            FGenerateResultStruct FirstIndexResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, FirstIndexPin, 0, MacroStack);
+            FGenerateResultStruct LastIndexResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, LastIndexPin, 0, MacroStack);
+
+			LocalPreparations.Append(FirstIndexResultStruct.Preparations);
+			LocalPreparations.Append(LastIndexResultStruct.Preparations);
+
+            Content += GenerateNewPreparations(Preparations, LocalPreparations);
 
             FString BodyCode;
             if (LoopBodyPin && LoopBodyPin->LinkedTo.Num() > 0)
@@ -46,11 +53,11 @@ FString UForLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString En
                 UK2Node* BodyNode = Cast<UK2Node>(LoopBodyPin->LinkedTo[0]->GetOwningNode());
                 FString BodyPinName = LoopBodyPin->LinkedTo[0]->GetName();
 
-                BodyCode = NativizationV2Subsystem->GenerateCodeFromNode(BodyNode, BodyPinName, VisitedNodes, MacroStack);
+                BodyCode = NativizationV2Subsystem->GenerateCodeFromNode(BodyNode, BodyPinName, VisitedNodes, LocalPreparations, MacroStack);
             }
 
             Content += FString::Format(TEXT("for (int32 {0} = {1}; {0} <= {2}; {0}++)\n{\n{3}\n}"),
-                { *IndexVar, *FirstIndex, *LastIndex, *BodyCode });
+                { *IndexVar, *FirstIndexResultStruct.Code, *LastIndexResultStruct.Code, *BodyCode });
         }
     }
 

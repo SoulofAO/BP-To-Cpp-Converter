@@ -8,12 +8,13 @@
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
 
-FString UMakeMapTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UMakeMapTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_MakeMap* MakeMapNode = Cast<UK2Node_MakeMap>(Node))
 	{
 		FName ElementCppType = *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
 		TArray<TPair<FString, FString>> Elements;
+		TSet<FString> Preparations;
 
 		TArray<UEdGraphPin*> InputPins = UBlueprintNativizationLibrary::GetFilteredPins(MakeMapNode, EPinOutputOrInputFilter::Input, EPinExcludeFilter::None, EPinIncludeOnlyFilter::None);
 
@@ -23,9 +24,13 @@ FString UMakeMapTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Nod
 			UEdGraphPin* KeyGraphPin = InputPins[Index];
 			UEdGraphPin* ValueGraphPin = InputPins[Index + 1];
 
+			FGenerateResultStruct KeyInputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeMapNode, KeyGraphPin, 0, MacroStack);
+			FGenerateResultStruct ValueInputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeMapNode, ValueGraphPin, 0, MacroStack);
+
 			Elements.Add(TPair<FString, FString>(
-				NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeMapNode, KeyGraphPin, 0, MacroStack),
-				NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeMapNode, ValueGraphPin, 0, MacroStack)));
+				KeyInputResultStruct.Code,
+				ValueInputResultStruct.Code));
+			Preparations.Append(KeyInputResultStruct.Preparations);
 		}
 
 		
@@ -42,5 +47,5 @@ FString UMakeMapTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Nod
 
 		return ArrayLiteral;
 	}
-	return "";
+	return FGenerateResultStruct();
 }

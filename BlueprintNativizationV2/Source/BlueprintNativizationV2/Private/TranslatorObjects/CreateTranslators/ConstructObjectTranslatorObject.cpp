@@ -8,7 +8,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UConstructObjectTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UConstructObjectTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (!Node || !NativizationV2Subsystem)
 	{
@@ -21,14 +21,20 @@ FString UConstructObjectTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FS
 	}
 
 	FString Content;
+	TSet<FString> LocalPreparation;
 
 	UEdGraphPin* ClassPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("Class"));
 	UEdGraphPin* OuterPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("Outer"));
 	UEdGraphPin* ResultPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("ReturnValue"));
 
 	FString BaseClassName = UBlueprintNativizationLibrary::GetUniqueFieldName(ConstructNode->GetClassToSpawn());
-	FString ClassArg = ClassPin ? NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ClassPin, 0, MacroStack) : TEXT("nullptr");
-	FString OuterArg = OuterPin ? NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, OuterPin, 0, MacroStack) : TEXT("nullptr");
+	FGenerateResultStruct ClassPinResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ClassPin, 0, MacroStack);
+	FGenerateResultStruct OuterPinResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, OuterPin, 0, MacroStack);
+	LocalPreparation.Append(ClassPinResultStruct.Preparations);
+	LocalPreparation.Append(OuterPinResultStruct.Preparations);
+
+	FString ClassArg = ClassPin ? ClassPinResultStruct.Code : TEXT("nullptr");
+	FString OuterArg = OuterPin ? OuterPinResultStruct.Code : TEXT("nullptr");
 	FString ResultVar = "";
 	FString DeclarationVar = "";
 
@@ -60,15 +66,19 @@ FString UConstructObjectTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FS
 			UEdGraphPin* FoundPin = ConstructNode->FindPin(Property->GetName());
 			if (FoundPin)
 			{
+				FGenerateResultStruct FoundPinResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(ConstructNode, FoundPin, 0, MacroStack);
+				LocalPreparation.Append(FoundPinResultStruct.Preparations);
 				Content += FString::Format(TEXT("{0}->{1} = {2};\n"), {
 					ResultVar,
-					UBlueprintNativizationLibrary::GetUniquePropertyName(Property, NativizationV2Subsystem->EntryNodes),
-					NativizationV2Subsystem->GenerateInputParameterCodeForNode(ConstructNode, FoundPin, 0, MacroStack)
+					UBlueprintNativizationLibrary::GetUniquePropertyName(Property),
+					FoundPinResultStruct.Code
 					});
 			}
 		}
 		Content += "}\n";
 	}
 
-	return Content;
+	FString Preparation = GenerateNewPreparations(Preparations, LocalPreparation);
+	Preparations.Append(LocalPreparation);
+	return Preparation + Content;
 }

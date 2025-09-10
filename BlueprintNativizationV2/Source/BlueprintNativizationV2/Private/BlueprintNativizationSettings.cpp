@@ -11,6 +11,8 @@
 #include "TranslatorObjects/Latens/DelayTranslatorObject.h"
 #include "TranslatorObjects/Latens/DelayNextTickTranslatorObject.h"
 #include "TranslatorObjects/Latens/RetriggerableDelayTranslatorObject.h"
+#include "TranslatorObjects/Latens/AsyncLoadAssetTranslatorObject.h"
+#include "TranslatorObjects/Latens/AIMoveToTranslatorObject.h"
 #include "TranslatorObjects/Cycles/ForEachLoopTranslatorObject.h"
 #include "TranslatorObjects/Cycles/ForLoopTranslatorObject.h"
 #include "TranslatorObjects/MoveComponentToTranslatorObject.h"
@@ -39,6 +41,9 @@
 #include "TranslatorObjects/SwitchTranslatorObject.h"
 #include "TranslatorObjects/Array/GetArrayItemTranslatorObject.h"
 
+#include "TranslatorObjects/CastByteToEnumTranslatorObject.h"
+#include "TranslatorObjects/EnumNameAsStringTranslatorObject.h"
+
 #include "TranslatorObjects/CreateTranslators/AddComponentTranslatorObject.h"
 #include "TranslatorObjects/CreateTranslators/ConstructObjectTranslatorObject.h"
 #include "TranslatorObjects/CreateTranslators/CreateWidgetTranslatorObject.h"
@@ -46,6 +51,9 @@
 
 #include "TranslatorObjects/GetSubsystemTranslatorObject.h"
 #include "TranslatorObjects/EnhancedInputTranslatorObject.h"
+#include "TranslatorObjects/ComponentEventTranslatorObject.h"
+#include "TranslatorObjects/BinaryOperatorTranslatorObject.h"
+
 
 #include "TranslatorObjects/ReturnTranslatorObject.h"
 
@@ -62,6 +70,7 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 		UBranchTranslatorObject::StaticClass(),
 		UDelayTranslatorObject::StaticClass(),
 		UDelayNextTickTranslatorObject::StaticClass(),
+		UAIMoveToTranslatorObject::StaticClass(),
 		URetriggarableDelayTranslatorObject::StaticClass(),
 		UForEachLoopTranslatorObject::StaticClass(),
 		UForLoopTranslatorObject::StaticClass(),
@@ -90,6 +99,12 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 		UMakeMapTranslatorObject::StaticClass(),
 		UGetArrayItemTranslatorObject::StaticClass(),
 		UEnhancedInputTranslatorObject::StaticClass(),
+		UComponentEventTranslatorObject::StaticClass(),
+		UBinaryOperatorTranslatorObject::StaticClass(),
+		UAsyncLoadAssetTranslatorObject::StaticClass(),
+
+		UCastByteToEnumTranslatorObject::StaticClass(),
+		UEnumNameAsStringTranslatorObject::StaticClass(),
 
 		USelectTranslatorObject::StaticClass(),
 		USwitchTranslatorObject::StaticClass(),
@@ -445,6 +460,12 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 				FConstructorPropertyDescriptor(TEXT("Yaw"), 1, TEXT("0.0")),
 				FConstructorPropertyDescriptor(TEXT("Roll"), 2, TEXT("0.0"))
 			}
+		),		
+		FConstructorDescriptor(
+		TEXT("FTimerHandle"),
+		{
+		},
+		false
 		),
 		FConstructorDescriptor(
 			TEXT("FTransform"),
@@ -831,6 +852,21 @@ bool UBlueprintNativizationSettingsLibrary::FindNativeByClassAndName(UClass* Own
 	return false;
 }
 
+FString UBlueprintNativizationSettingsLibrary::GetModuleApiName()
+{
+	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
+
+	FString ModuleNameUpper = Settings->ModuleName.ToUpper();
+	return ModuleNameUpper + TEXT("_API");
+}
+
+
+FString UBlueprintNativizationSettingsLibrary::GetModuleName()
+{
+	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
+	return Settings->ModuleName;
+}
+
 bool UBlueprintNativizationSettingsLibrary::FindNativeByBlueprint(const FFunctionDescriptor BlueprintDesc, FFunctionDescriptor& OutNativeDesc)
 {
 	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
@@ -866,7 +902,29 @@ bool UBlueprintNativizationSettingsLibrary::FindConstructorDescriptorByStruct(US
 	return false;
 }
 
-bool UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByPropertyName(FProperty* Property, FGetterAndSetterPropertyDescriptor& OutGetterAndSetterDescriptorDesc)
+bool UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByPropertyNameAndObject(FName PropertyOriginalName, UObject* Object, FGetterAndSetterPropertyDescriptor& OutGetterAndSetterDescriptorDesc)
+{
+	if (Object == nullptr)
+	{
+		return false;
+	}
+
+	UClass* Class = Object->GetClass();
+	if (Class == nullptr)
+	{
+		return false;
+	}
+
+	FProperty* Property = Class->FindPropertyByName(PropertyOriginalName);
+	if (Property == nullptr)
+	{
+		return false;
+	}
+
+	return FindGetterAndSetterDescriptorDescriptorByProperty(Property, OutGetterAndSetterDescriptorDesc);
+}
+
+bool UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(FProperty* Property, FGetterAndSetterPropertyDescriptor& OutGetterAndSetterDescriptorDesc)
 {
 	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
 

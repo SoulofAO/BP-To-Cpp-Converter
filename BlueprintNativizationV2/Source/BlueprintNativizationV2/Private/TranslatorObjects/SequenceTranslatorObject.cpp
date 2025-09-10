@@ -8,11 +8,10 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString USequenceTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString USequenceTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	FString Content;
 
-	// Получаем все Exec output пины (Then0, Then1, ...)
 	TArray<UEdGraphPin*> ExecPins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin);
 
 	for (UEdGraphPin* OutPin : ExecPins)
@@ -21,7 +20,7 @@ FString USequenceTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString E
 		{
 			UK2Node* NextNode = Cast<UK2Node>(OutPin->LinkedTo[0]->GetOwningNode());
 			FString NextPinName = OutPin->LinkedTo[0]->GetName();
-			Content += NativizationV2Subsystem->GenerateCodeFromNode(NextNode, NextPinName, VisitedNodes, MacroStack) + "\n";
+			Content += NativizationV2Subsystem->GenerateCodeFromNode(NextNode, NextPinName, VisitedNodes, Preparations, MacroStack) + "\n";
 		}
 	}
 

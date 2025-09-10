@@ -189,6 +189,29 @@ public:
     }
 };
 
+USTRUCT()
+struct FGenerateResultStruct
+{
+
+    GENERATED_BODY()
+
+public:
+    UPROPERTY()
+    FString Code;
+
+    UPROPERTY()
+    TSet<FString> Preparations;
+
+    FGenerateResultStruct() = default;
+    FGenerateResultStruct(FString NewCode, TSet<FString> NewPreparations)
+        : Code(NewCode), Preparations(NewPreparations)
+    {
+    }
+    FGenerateResultStruct(FString NewCode)
+        : Code(NewCode)
+    {
+    }
+};
 
 
 UCLASS()
@@ -196,9 +219,6 @@ class UBlueprintNativizationDataLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 public:
-    UFUNCTION(BlueprintCallable, Category = "Nativization")
-    static TArray<FName> GetAllBlueprintCallableNames(UBlueprint* Blueprint, bool RemoveAllMacro = true, bool bUseDisplayName = true);
-
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static  bool FindGenerateFunctionStructByName(
         UPARAM(ref) const TArray<FGenerateFunctionStruct>& GenerateFunctionStructs,

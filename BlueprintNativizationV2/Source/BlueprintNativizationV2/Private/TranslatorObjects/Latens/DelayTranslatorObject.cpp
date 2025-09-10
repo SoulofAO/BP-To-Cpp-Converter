@@ -63,7 +63,7 @@ TSet<FString> UDelayTranslatorObject::GenerateLocalVariables(UK2Node* InputNode,
 	return TSet<FString>({FString::Format(TEXT("{0} {1}"), { "FTimerHandle", TimerHandleName }) });
 }
 
-FString UDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetParentPins(UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin));
 
@@ -82,12 +82,17 @@ FString UDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString Entr
 			BindFunctionName = GenerateFunctionStruct.Name.ToString();
 		}
 
-		return FString::Format(TEXT("GetWorld()->GetTimerManager().SetTimer({0}, this, {1}::{2}, {3}, false);\n"), {
+		FGenerateResultStruct DurationResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Duration")), 0, MacroStack);
+
+		FString Content;
+		Content += GenerateNewPreparations(Preparations, DurationResultStruct.Preparations);
+		Preparations.Append(DurationResultStruct.Preparations);
+		Content += FString::Format(TEXT("GetWorld()->GetTimerManager().SetTimer({0}, this, {1}::{2}, {3}, false);\n"), {
 		*TimerHandleName,
 		*Node->GetBlueprint()->GetName(),
 		*BindFunctionName,
-		*NativizationV2Subsystem -> GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Duration")), 0, MacroStack)
-			});
+		*DurationResultStruct.Code});
+		return Content;
 	}
 
 	return FString();

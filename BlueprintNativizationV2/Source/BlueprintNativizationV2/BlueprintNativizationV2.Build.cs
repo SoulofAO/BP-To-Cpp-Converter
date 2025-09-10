@@ -60,7 +60,8 @@ public class BlueprintNativizationV2 : ModuleRules
 				"InputBlueprintNodes",
 				"ControlRig",
 				"PropertyEditor",
-                "Blutility"
+                "Blutility",
+                "AIGraph"
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

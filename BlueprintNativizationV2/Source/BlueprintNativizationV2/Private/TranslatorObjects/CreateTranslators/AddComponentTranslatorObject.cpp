@@ -8,7 +8,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (!Node || !NativizationV2Subsystem)
 	{
@@ -16,6 +16,7 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 	}
 
 	FString Content;
+	TSet<FString> NewPreparations;
 
 	if (UK2Node_AddComponent* AddComponentNode = Cast<UK2Node_AddComponent>(Node))
 	{
@@ -48,11 +49,14 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 			UEdGraphPin* ManualAttachmentPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("bManualAttachment"));
 			UEdGraphPin* RelativeTransformPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("RelativeTransform"));
 
-			FString ManualAttachmentArg = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, ManualAttachmentPin, 0, MacroStack);
-			FString RelativeTransformArg = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, RelativeTransformPin, 0, MacroStack);
+			FGenerateResultStruct  ManualAttachmentArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, ManualAttachmentPin, 0, MacroStack);
+			FGenerateResultStruct  RelativeTransformArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, RelativeTransformPin, 0, MacroStack);
+
+			NewPreparations.Append(ManualAttachmentArgResultStruct.Preparations);
+			NewPreparations.Append(RelativeTransformArgResultStruct.Preparations);
 
 			Content += FString::Format(TEXT("if (!{0}->bManualAttachment)\n{\n\t{0}->SetupAttachment(nullptr);\n}\n"), { *ResultVar });
-			Content += FString::Format(TEXT("{0}->SetRelativeTransform({1});\n"), { *ResultVar, *RelativeTransformArg });
+			Content += FString::Format(TEXT("{0}->SetRelativeTransform({1});\n"), { *ResultVar, *RelativeTransformArgResultStruct.Code });
 		}
 
 		TArray<FProperty*> ExposeOnSpawnProperties = UBlueprintNativizationLibrary::GetExposeOnSpawnProperties(AddComponentNode->TemplateType);
@@ -113,10 +117,13 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 				UEdGraphPin* FoundPin = AddComponentNode->FindPin(Property->GetName());
 				if (FoundPin)
 				{
+					FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, FoundPin, 0, MacroStack);
+					NewPreparations.Append(GenerateResultStruct.Preparations);
+
 					Content += FString::Format(TEXT("{0}->{1} = {2};\n"), {
 						ResultVar,
-						UBlueprintNativizationLibrary::GetUniquePropertyName(Property, NativizationV2Subsystem->EntryNodes),
-						NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, FoundPin, 0, MacroStack)
+						UBlueprintNativizationLibrary::GetUniquePropertyName(Property),
+						GenerateResultStruct.Code
 					});
 				}
 			}
@@ -133,7 +140,8 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 		UEdGraphPin* ClassPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("Class"));
 		UEdGraphPin* ResultPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("ReturnValue"));
 
-		FString ClassArg = ClassPin ? NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ClassPin, 0, MacroStack) : TEXT("nullptr");
+		FGenerateResultStruct ClassArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ClassPin, 0, MacroStack);
+		FString ClassArg = ClassPin ? ClassArgResultStruct.Code : TEXT("nullptr");
 		FString ResultVar = "";
 		FString DeclarationVar = "";
 
@@ -159,11 +167,13 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 			UEdGraphPin* ManualAttachmentPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("bManualAttachment"));
 			UEdGraphPin* RelativeTransformPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("RelativeTransform"));
 
-			FString ManualAttachmentArg = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentByClassNode, ManualAttachmentPin, 0, MacroStack);
-			FString RelativeTransformArg = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentByClassNode, RelativeTransformPin, 0, MacroStack);
+			FGenerateResultStruct  ManualAttachmentArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, ManualAttachmentPin, 0, MacroStack);
+			FGenerateResultStruct  RelativeTransformArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, RelativeTransformPin, 0, MacroStack);
+			NewPreparations.Append(ManualAttachmentArgResultStruct.Preparations);
+			NewPreparations.Append(RelativeTransformArgResultStruct.Preparations);
 
 			Content += FString::Format(TEXT("if (!{0}->bManualAttachment)\n{\n\t{0}->SetupAttachment(nullptr);\n}\n"), { *ResultVar });
-			Content += FString::Format(TEXT("{0}->SetRelativeTransform({1});\n"), { *ResultVar, *RelativeTransformArg });
+			Content += FString::Format(TEXT("{0}->SetRelativeTransform({1});\n"), { *ResultVar, *RelativeTransformArgResultStruct.Code });
 		}
 
 		TArray<FProperty*> ExposeOnSpawnProperties = UBlueprintNativizationLibrary::GetExposeOnSpawnProperties(AddComponentByClassNode->GetClassToSpawn());
@@ -175,10 +185,13 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 				UEdGraphPin* FoundPin = AddComponentByClassNode->FindPin(Property->GetName());
 				if (FoundPin)
 				{
+					FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, FoundPin, 0, MacroStack);
+					NewPreparations.Append(GenerateResultStruct.Preparations);
+
 					Content += FString::Format(TEXT("{0}->{1} = {2};\n"), {
 						ResultVar,
-						UBlueprintNativizationLibrary::GetUniquePropertyName(Property, NativizationV2Subsystem->EntryNodes),
-						NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentByClassNode, FoundPin, 0, MacroStack)
+						UBlueprintNativizationLibrary::GetUniquePropertyName(Property),
+						GenerateResultStruct.Code
 						});
 				}
 			}
@@ -187,5 +200,7 @@ FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStri
 		Content += FString::Format(TEXT("{0}->RegisterComponent();\n"), { *ResultVar });
 	}
 
-	return Content;
+	FString Preparation = GenerateNewPreparations(Preparations, NewPreparations);
+	Preparations.Append(NewPreparations);
+	return Preparation + Content;
 }

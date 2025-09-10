@@ -108,7 +108,7 @@ void FConversionDetailsFunctionCustomization::CustomizeDetails(IDetailLayoutBuil
 FReply FConversionDetailsFunctionCustomization::OnTransformOnlyFunctionToCodeButtonClicked()
 {
 	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
-	FName SelectedNodeOriginalFunctionName = UBlueprintNativizationLibrary::GetOriginalFunctionNameByNode(EditingNode.Get());
+	FName SelectedNodeOriginalFunctionName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EditingNode.Get());
 
 	if (Settings->SetupActionObject)
 	{

@@ -43,9 +43,9 @@ TSet<FString> UTranslatorBPToCppObject::GenerateCSPrivateDependencyModuleNames(U
 	return TSet<FString>();
 }
 
-FString UTranslatorBPToCppObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UTranslatorBPToCppObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-	return UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes);
+	return FGenerateResultStruct(UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes));
 }
 
 bool UTranslatorBPToCppObject::CanContinueGenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -117,6 +117,17 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 	}
 
 	return Contents;
+}
+
+FString UTranslatorBPToCppObject::GenerateNewPreparations(TSet<FString> OldPreparations, TSet<FString> NewPreparations)
+{
+	TSet<FString> DifferencePreparations = NewPreparations.Difference(OldPreparations);
+	FString JoinedString = FString::Join(DifferencePreparations.Array(), TEXT("\n"));
+	if (!JoinedString.IsEmpty())
+	{
+		JoinedString = JoinedString + "\n";
+	}
+	return JoinedString;
 }
 
 bool UTranslatorBPToCppObject::CanApply(UK2Node* Node)

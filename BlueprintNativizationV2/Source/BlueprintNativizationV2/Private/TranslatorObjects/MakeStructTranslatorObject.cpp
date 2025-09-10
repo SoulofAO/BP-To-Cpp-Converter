@@ -25,7 +25,7 @@ bool UMakeStructTranslatorObject::CanApply(UK2Node* Node)
     return false;
 }
 
-FString UMakeStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UMakeStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
     TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input, EPinExcludeFilter::None, EPinIncludeOnlyFilter::None);
     TArray<UEdGraphPin*> ParentPins = UBlueprintNativizationLibrary::GetParentPins(Pins);
@@ -33,12 +33,14 @@ FString UMakeStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* 
     FString PinCategory = UBlueprintNativizationLibrary::GetPinType(Pin->PinType, true);
 
     TArray<FString> Args;
+    TSet<FString> Preparations;
 
     for (UEdGraphPin* ParentPin : ParentPins)
     {
         FString PinInputContent = "";
-
-        Args.Add(NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ParentPin, 0, MacroStack));
+        FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ParentPin, 0, MacroStack);
+        Args.Add(InputResultStruct.Code);
+		Preparations.Append(InputResultStruct.Preparations);
     }
-    return FString::Format(TEXT("{0}({1})"), { PinCategory,FString::Join(Args, TEXT(", ")) });
+    return FGenerateResultStruct(FString::Format(TEXT("{0}({1})"), { PinCategory,FString::Join(Args, TEXT(", ")) }), Preparations);
 }

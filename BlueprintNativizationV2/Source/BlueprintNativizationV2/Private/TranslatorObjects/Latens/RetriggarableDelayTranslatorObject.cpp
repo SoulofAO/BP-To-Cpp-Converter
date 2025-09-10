@@ -64,7 +64,7 @@ FString URetriggarableDelayTranslatorObject::GenerateGlobalVariables(UK2Node* In
 	return FString::Format(TEXT("{0} {1}"), { "FTimerHandle", TimerHandleName });
 }
 
-FString URetriggarableDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString URetriggarableDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetParentPins(UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin));
 
@@ -77,20 +77,22 @@ FString URetriggarableDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 		FGenerateFunctionStruct GenerateFunctionStruct;
 
 		UK2Node* NextDelayFunction = Cast<UK2Node>(UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pins[0], 0, false, MacroStack, NativizationV2Subsystem)->GetOwningNode());
+		FGenerateResultStruct DurationResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Duration")), 0, MacroStack);
 
 		if (UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, NextDelayFunction, GenerateFunctionStruct))
 		{
 			BindFunctionName = GenerateFunctionStruct.Name.ToString();
 		}
 		FString Content;
-		Content += FString::Format(TEXT("GetWorld()->ClearTimer({0})\n"), { *TimerHandleName });
+		Content += GenerateNewPreparations(Preparations, DurationResultStruct.Preparations);
+		Preparations.Append(DurationResultStruct.Preparations);
 
+		Content += FString::Format(TEXT("GetWorld()->ClearTimer({0})\n"), { *TimerHandleName });
 		Content += FString::Format(TEXT("GetWorld()->GetTimerManager().SetTimer({0}, this, {1}::{2}, {3}, false);\n"), {
 		*TimerHandleName,
 		*Node->GetBlueprint()->GetName(),
 		*BindFunctionName,
-		*NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Duration")), 0, MacroStack)
-			});
+		*DurationResultStruct.Code });
 
 		return Content;
 	}

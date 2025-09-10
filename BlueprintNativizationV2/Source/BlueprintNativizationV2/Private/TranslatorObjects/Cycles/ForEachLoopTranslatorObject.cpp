@@ -11,8 +11,7 @@
 FString UForEachLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
     FString EntryPinName,
     TArray<FVisitedNodeStack> VisitedNodes,
-    TArray<UK2Node*> MacroStack,
-    UNativizationV2Subsystem* NativizationV2Subsystem)
+    TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_MacroInstance* MacroNode = Cast<UK2Node_MacroInstance>(Node))
 	{
@@ -44,16 +43,24 @@ FString UForEachLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 				UK2Node* BodyNode = LoopBodyPin && LoopBodyPin->LinkedTo.Num() > 0
 					? Cast<UK2Node>(LoopBodyPin->LinkedTo[0]->GetOwningNode()) : nullptr;
 
-				
-				return  FString::Format(TEXT("{0}\nfor ({1} {2}: {3})\n{\n{4}\n\n{5}}"),
+				FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, ArrayPin, 0, MacroStack);
+				TSet<FString> LocalPreparations;
+				LocalPreparations.Append(GenerateResultStruct.Preparations);
+
+				FString Content;
+				Content += GenerateNewPreparations(Preparations, LocalPreparations);
+
+				Content += FString::Format(TEXT("{0}\nfor ({1} {2}: {3})\n{\n{4}\n\n{5}}"),
 					{
 				    FString::Format(TEXT("{0} {1} = 0;\n\n"), {"int32", UBlueprintNativizationLibrary::GetUniquePinName(ArrayIndexPin, NativizationV2Subsystem->EntryNodes)}),
 					ArrayElementPin->PinType.PinCategory.ToString(),
 					UBlueprintNativizationLibrary::GetUniquePinName(ArrayElementPin, NativizationV2Subsystem->EntryNodes),
-					*NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, ArrayPin, 0, MacroStack),
-					*NativizationV2Subsystem->GenerateCodeFromNode(BodyNode, LoopBodyPin->LinkedTo[0]->GetName(), VisitedNodes, MacroStack),
+					GenerateResultStruct.Code,
+					*NativizationV2Subsystem->GenerateCodeFromNode(BodyNode, LoopBodyPin->LinkedTo[0]->GetName(), VisitedNodes, LocalPreparations, MacroStack),
 					FString(UBlueprintNativizationLibrary::GetUniquePinName(ArrayIndexPin, NativizationV2Subsystem->EntryNodes) + "++;")
 					});
+
+				return Content;
 			}
 		}
 	}
