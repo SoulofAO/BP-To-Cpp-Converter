@@ -62,6 +62,8 @@ Introduction and Warning
 > ⚠️ **IMPORTANT WARNING**
 > 
 > The plugin is currently in active development. Errors in the generated code may occur when using the current version. Many of these errors are being fixed during development, but some arise from fundamental limitations of the Unreal Engine, where certain elements do not support full reflection.
+> 
+> The plugin is designed for Unreal Engine version 5.6 or later.
 
 <h1 align="center"> 
 Plugin Overview
