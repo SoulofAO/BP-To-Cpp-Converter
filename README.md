@@ -229,6 +229,11 @@ Initialization
 
 At the beginning of working with the plugin, it is strongly recommended to initialize the module **BlueprintNativizationModule**. This module serves as the space where all C++ codes are saved for subsequent migration of Blueprint assets to them. The resulting code will be structured. To initialize, go to Other Action, click the button Initialize Blueprint Initialization Module, and recompile the project. If everything is done correctly, the module status at the top of your toolbar will change. This action needs to be performed ONLY ONCE, BEFORE STARTING WORK.
 
+Other Actions, there are other useful features found, aside from Initialize Blueprint Initialization Module, such as Reset Names. The project aims to meticulously avoid name conflicts that can occur if you conduct nativization in series without applying the generated code results. Name conflicts are resolved using a specifically designated Unique Name system, and while resetting it is not necessary, it is often useful as it clears unnecessary cache in the system for temporarily allocated variables. Nevertheless, it is recommended to perform nativization step-by-step, transferring generated code objects to BP objects, or in one large series. This is partly because the cache only exists within one Unreal Engine session and does not persist longer.
+
+**PrintAllK2Nodes** – ignore this, its developer future.
+
+The widget settings are designed to be constantly adjusted.
 </details>
 
 * * * * * * * * * * * * * * * * * * 
@@ -257,6 +262,8 @@ Usage Example
    - At the bottom, in the editor, you will see the resulting code.
 
 To test the plugin, you can use your own, **TestNativizationActor**, or any other from the Tests folder.
+
+
 
 </details>
 
@@ -355,12 +362,10 @@ Other Actions and Settings
 <details>
   <summary align="center">⚙️ Expand Description</summary>
 
-In Other Actions, there are other useful features found, aside from Initialize Blueprint Initialization Module, such as Reset Names. The project aims to meticulously avoid name conflicts that can occur if you conduct nativization in series without applying the generated code results. Name conflicts are resolved using a specifically designated Unique Name system, and while resetting it is not necessary, it is often useful as it clears unnecessary cache in the system for temporarily allocated variables. Nevertheless, it is recommended to perform nativization step-by-step, transferring generated code objects to BP objects, or in one large series. This is partly because the cache only exists within one Unreal Engine session and does not persist longer.
+ For more permanent settings, there is Blueprint Nativization V2 Editor Settings in the Editor Settings.
 
-**PrintAllK2Nodes** – ignore this.
-
-The widget settings are designed to be constantly adjusted. For more permanent settings, there is Blueprint Nativization V2 Editor Settings in the Editor Settings.
-
+In summary, in addition to settings like those used by Translator, the data presented here attempts to supplement data that is inaccessible due to limited reflection.
+Presumably, in the future, this data will be filled automatically.
 </details>
 
 * * * * * * * * * * * * * * * * * * 
