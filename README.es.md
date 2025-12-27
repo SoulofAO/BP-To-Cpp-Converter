@@ -229,6 +229,11 @@ Inicialización
 
 Al comenzar a trabajar con el plugin, se recomienda encarecidamente inicializar el módulo **BlueprintNativizationModule**. Este módulo sirve como el espacio donde se guardan todos los códigos C++ para la posterior migración de los activos de Blueprint. El código resultante estará estructurado. Para iniciar, ve a Other Action, haz clic en el botón Initialize Blueprint Initialization Module y recompila el proyecto. Si todo se hace correctamente, el estado del módulo en la parte superior de tu barra de herramientas cambiará. Este acción necesita realizarse SOLO UNA VEZ, ANTES DE EMPEZAR A TRABAJAR.
 
+En Other Actions, se incluyen otras funcionalidades útiles, aparte de Initialize Blueprint Initialization Module, como Reset Names. El proyecto tiene como objetivo evitar meticulosamente conflictos de nombres que pueden ocurrir si realizas la nativización en series sin aplicar los resultados del código generado. Los conflictos de nombres se resuelven utilizando un sistema designado específicamente como Unique Name, y aunque no es necesario resetearlo, a menudo es útil, ya que limpia la caché innecesaria en el sistema para variables asignadas temporalmente. No obstante, se recomienda realizar la nativización paso a paso, transfiriendo los objetos de código generados a los objetos BP, o en una gran serie. Esto se debe en parte a que la caché solo existe dentro de una sesión de Unreal Engine y no persiste más tiempo.
+
+**PrintAllK2Nodes** – ignóralo, es para desarrolladores en el futuro.
+
+Las configuraciones del widget están diseñadas para ajustarse continuamente.
 </details>
 
 * * * * * * * * * * * * * * * * * * 
@@ -257,6 +262,7 @@ Ejemplo de Uso
    - En la parte inferior del editor, verás el código resultante.
 
 Para probar el plugin, puedes usar tu propio **TestNativizationActor**, o cualquier otro de la carpeta Tests.
+
 
 </details>
 
@@ -355,12 +361,10 @@ Otras Acciones y Configuraciones
 <details>
   <summary align="center">⚙️ Expandir Descripción</summary>
 
-En Other Actions, se incluyen otras funcionalidades útiles, aparte de Initialize Blueprint Initialization Module, como Reset Names. El proyecto tiene como objetivo evitar meticulosamente conflictos de nombres que pueden ocurrir si realizas la nativización en series sin aplicar los resultados del código generado. Los conflictos de nombres se resuelven utilizando un sistema designado específicamente como Unique Name, y aunque no es necesario resetearlo, a menudo es útil, ya que limpia la caché innecesaria en el sistema para variables asignadas temporalmente. No obstante, se recomienda realizar la nativización paso a paso, transfiriendo los objetos de código generados a los objetos BP, o en una gran serie. Esto se debe en parte a que la caché solo existe dentro de una sesión de Unreal Engine y no persiste más tiempo.
+Para configuraciones más permanentes, existe Blueprint Nativization V2 Editor Settings en Editor Settings.
 
-**PrintAllK2Nodes** – ignóralo.
-
-Las configuraciones del widget están diseñadas para ajustarse continuamente. Para configuraciones más permanentes, existe Blueprint Nativization V2 Editor Settings en Editor Settings.
-
+En resumen, además de configuraciones como las utilizadas por Translator, los datos presentados aquí intentan complementar información que es inaccesible debido a la reflexión limitada.
+Presumiblemente, en el futuro, estos datos se llenarán automáticamente.
 </details>
 
 * * * * * * * * * * * * * * * * * * 
