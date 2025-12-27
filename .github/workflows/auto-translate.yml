@@ -1,0 +1,152 @@
+# ------------------------------------------------------------
+# Архитектура pipeline
+#
+# Job 1: RU -> EN
+#   README.ru.md
+#       ↓
+#   temp/README.en.tmp.md   (канон)
+# 
+# Job 2: EN -> Other languages
+#   temp/README.en.tmp.md
+#       ↓
+#   temp/README.es.tmp.md
+#   temp/README.zh.tmp.md
+# 
+# Job 3: Create PR
+#   temp/*
+#       ↓
+#   README.md
+#   README.es.md
+#   README.zh.md
+# ------------------------------------------------------------
+
+name: Auto translate README
+
+on:
+  workflow_dispatch:
+
+# на всяк случай
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+
+jobs:
+  # ------------------------------------------------------------
+  # JOB 1 - RU -> EN (канонический перевод)
+  # ------------------------------------------------------------
+  translate-en:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Translate README.ru.md to English
+        uses: FidelusAleksander/ai-translate-action@v1
+        id: translate-en
+        with:
+          text-file: README.ru.md
+          target-language: english
+          custom-instructions: |
+            Technical terms must remain in English.
+            Do not translate code blocks or URLs.
+            This file will be used as the canonical source for other translations.
+
+      - name: Save canonical English README
+        run: |
+          mkdir -p temp
+          echo "$TRANSLATED_TEXT" | tee temp/README.en.tmp.md
+        env:
+          TRANSLATED_TEXT: ${{ steps.translate-en.outputs.translated-text }}
+
+      - name: Upload English artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: readme-en
+          path: temp/README.en.tmp.md
+
+  # ------------------------------------------------------------
+  # JOB 2 - EN -> Other languages
+  # ------------------------------------------------------------
+  translate-others:
+    needs: translate-en
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - language: spanish
+            file: README.es.tmp.md
+          - language: chinese
+            file: README.zh.tmp.md
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download English artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: readme-en
+          path: temp
+
+      - name: Translate from English
+        uses: FidelusAleksander/ai-translate-action@v1
+        id: translate
+        with:
+          text-file: temp/README.en.tmp.md
+          target-language: ${{ matrix.language }}
+          custom-instructions: |
+            Preserve technical terminology in English.
+            Do not translate code blocks or URLs.
+
+      - name: Save translation
+        run: |
+          echo "$TRANSLATED_TEXT" | tee temp/${{ matrix.file }}
+        env:
+          TRANSLATED_TEXT: ${{ steps.translate.outputs.translated-text }}
+
+      - name: Upload translation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.language }}
+          path: temp/${{ matrix.file }}
+
+  # ------------------------------------------------------------
+  # JOB 3 - Create PR
+  # ------------------------------------------------------------
+  create-pr:
+    needs: translate-others
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: temp
+          merge-multiple: true
+
+      - name: Move files to repository root
+        run: |
+          mv temp/README.en.tmp.md README.md
+          mv temp/README.es.tmp.md README.es.md
+          mv temp/README.zh.tmp.md README.zh.md
+          rm -rf temp
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: update README translations"
+          title: "docs: update README translations"
+          body: |
+            Translation pipeline:
+            RU -> EN (canonical)
+            EN -> other languages
+          branch: docs/update-readme-translations
+          add-paths: |
+            README.md
+            README.es.md
+            README.zh.md
+          delete-branch: true
+          labels: |
+            documentation
+            translation

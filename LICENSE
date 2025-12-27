@@ -1,0 +1,40 @@
+Conditional BP To Cpp Converter Plugin License (CBPL)
+
+Copyright (c) 2025 SoulofAO
+
+1. Requirement for Derivative Works
+
+Any derivative work, fork, extension, or plugin whose primary purpose is adding, managing, evaluating, or otherwise operating conditional breakpoints in Unreal Engine Blueprints must be fully open source. Such works must be distributed under terms that are compatible with this license.
+
+2. Reuse for Other Primary Purposes
+
+Projects that reuse the code for a different primary purpose (i.e., when the main purpose is not related to conditional breakpoint handling in Blueprints) may be closed source or commercial.
+
+Such usage is permitted only under the following conditions:
+
+- Clear attribution to the original project must be included in documentation or about pages.
+
+- The LICENSE and NOTICE files from the original project must be preserved in any distributed package.
+
+Attribution example:
+`
+This project includes components derived from the Conditional BP To Cpp Converter Plugin, originally developed by SoulofAO. Used under the Conditional BP To Cpp Converter Plugin License.
+`
+
+3. Preservation of Author Files
+
+You may not remove or alter the original LICENSE file, NOTICE file, or any existing author headers within the source files.
+
+All author attributions and license headers must remain intact in the source code and, where reasonable, in binary distributions.
+
+4. "AS IS" and Warranty Disclaimer
+
+The code is provided AS IS, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement.
+
+The authors shall not be liable for any claim, damages, or other liability arising from, out of, or in connection with the software or its use.
+
+5. Right to Modify These Rules
+
+The plugin authors reserve the right to modify this license and the associated rules in future versions. Any changes become effective upon publication.
+
+Revisions do not apply retroactively to previously released versions unless explicitly stated.
