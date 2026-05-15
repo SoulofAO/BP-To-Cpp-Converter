@@ -1,3 +1,6 @@
+
+The plugin has been sent for permanent revision; I do not recommend using it.
+
 <p align="center">
   <strong>-------></strong>
   <a href="/README.ru.md">Russian</a> |
