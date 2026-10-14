@@ -10,6 +10,7 @@
 #include "BlueprintNativizationData.h"
 #include "BlueprintNativizationSettings.h"
 #include "InputAction.h"
+#include "RetainedBlueprintGeneration.h"
 
 
 void UEnhancedInputTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path, TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -98,22 +99,8 @@ FString UEnhancedInputTranslatorObject::GenerateSetupPlayerInputComponentFunctio
 				FGenerateFunctionStruct GenerateFunctionStruct;
 				UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, NextNode, GenerateFunctionStruct);
 
-				FString InputActionContent;
-				if (NativizationV2Subsystem->LeftAllAssetRefInBlueprint)
-				{
-					InputActionContent = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(EnhancedInputAction->InputAction->GetName(), InputNode->GetBlueprint()->GeneratedClass);
-				}
-				else
-				{
-					InputActionContent = FString::Format(
-						TEXT("ConstructorHelpers::FObjectFinder<{0}>(TEXT(\"{1}\")).Object"),
-						{ 
-							UBlueprintNativizationLibrary::GetUniqueFieldName(EnhancedInputAction->InputAction->GetClass()),
-							FSoftObjectPath(EnhancedInputAction->InputAction).ToString()
-						}
-					);
-
-				}
+				const FString InputActionContent = FRetainedBlueprintGeneration::GetAssetValue(
+                    const_cast<UInputAction*>(EnhancedInputAction->InputAction.Get()), UInputAction::StaticClass());
 				Content += FString::Format(TEXT("EnhancedInputComponent->BindAction({0}, ETriggerEvent::{1}, this, &{2}::{3});\n"),
 					{ InputActionContent,
 					ExecNames[i],
@@ -129,18 +116,7 @@ FString UEnhancedInputTranslatorObject::GenerateSetupPlayerInputComponentFunctio
 
 FString UEnhancedInputTranslatorObject::GenerateGlobalVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-	FString Content;
-
-	if (UK2Node_EnhancedInputAction* EnhancedInputAction = Cast<UK2Node_EnhancedInputAction>(InputNode))
-	{
-		if (NativizationV2Subsystem->LeftAllAssetRefInBlueprint)
-		{
-			Content += FString::Format(TEXT("UPROPERTY(EditAnywhere, BlueprintReadOnly) \n {0} {1};\n"),
-				{UBlueprintNativizationLibrary::GetUniqueFieldName(EnhancedInputAction->InputAction->GetClass()) + "*",
-				UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(EnhancedInputAction->InputAction->GetName(), InputNode->GetBlueprint()->GeneratedClass)});
-		}
-	}
-	return Content;
+    return FString();
 }
 
 FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -183,7 +159,12 @@ FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCode
 				PathPins.RemoveAt(0);
 			}
 
-			FString Value = FString::Format(TEXT("{0}.GetValue().Get<{1}>()"), { ActionValuePinName, UBlueprintNativizationLibrary::GetPinType(ParentPin->PinType, false)});
+			FString ValueType = UBlueprintNativizationLibrary::GetPinType(ParentPin->PinType, false);
+            if (ValueType == TEXT("double"))
+            {
+                ValueType = TEXT("float");
+            }
+            FString Value = FString::Format(TEXT("{0}.GetValue().Get<{1}>()"), { ActionValuePinName, ValueType });
 			
 			for (UEdGraphPin* CheckPin : PathPins)
 			{
@@ -218,7 +199,7 @@ bool UEnhancedInputTranslatorObject::CanContinueGenerateInputParameterCodeForNod
 
 TSet<FString> UEnhancedInputTranslatorObject::GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-	return TSet<FString>();
+    return { TEXT("#include \"InputAction.h\"") };
 }
 
 TSet<FString> UEnhancedInputTranslatorObject::GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)

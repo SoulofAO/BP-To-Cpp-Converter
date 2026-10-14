@@ -51,7 +51,7 @@ void UAsyncLoadAssetTranslatorObject::GenerateNewFunction(
 	}
 }
 
-FString UAsyncLoadAssetTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UAsyncLoadAssetTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	if (UK2Node_LoadAsset* LoadAssetNode = Cast<UK2Node_LoadAsset>(Node))
 	{
@@ -73,7 +73,7 @@ FString UAsyncLoadAssetTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FSt
 
 		FGenerateResultStruct AssetPinResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, AssetPin, 0, MacroStack);
 		Content += GenerateNewPreparations(Preparations, AssetPinResultStruct.Preparations);
-		TSet<FString> LocalPreparations = Preparations;
+		FGenerationPreparations LocalPreparations = Preparations;
 		LocalPreparations.Append(AssetPinResultStruct.Preparations);
 
 		if (UEdGraphPin* TargetPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(OnCompleteExecPin, 0, true, MacroStack, NativizationV2Subsystem))

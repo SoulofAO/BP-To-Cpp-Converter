@@ -9,24 +9,12 @@
 #include "BlueprintNativizationSubsystem.h"
 
 
-FString UAddDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+#include "DelegateExpressions.h"
+
+FString UAddDelegateTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-    if (UK2Node_AddDelegate* AddDelegate = Cast<UK2Node_AddDelegate>(Node))
-    {
-        FMulticastDelegateProperty* DelegateProperty = AddDelegate->DelegateReference.ResolveMember<FMulticastDelegateProperty>(AddDelegate->GetBlueprintClassFromNode());
-        if (DelegateProperty)
-        {
-            TArray<UEdGraphPin*> Pins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input, EPinExcludeFilter::None, EPinIncludeOnlyFilter::DelegatePin);
-            FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, Pins[0], 0, MacroStack);
-
-            FString Content;
-			Content += GenerateNewPreparations(Preparations, GenerateResultStruct.Preparations);
-			Preparations.Append(GenerateResultStruct.Preparations);
-
-            Content += UBlueprintNativizationLibrary::GetUniquePropertyName(DelegateProperty) +
-                "->AddDynamic(" + GenerateResultStruct.Code + ");";
-            return Content;
-        }
-    }
-    return FString();
+    const FGenerateResultStruct Result = GenerateMulticastDelegateStatement(Node, MacroStack, NativizationV2Subsystem);
+    FString Content = GenerateNewPreparations(Preparations, Result.Preparations);
+    Preparations.Append(Result.Preparations);
+    return Content + Result.Code;
 }

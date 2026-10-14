@@ -7,7 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "TranslatorObjects/BaseTranslatorObject.h"
+#include "TranslatorObjects/Cycles/ForLoopTranslatorObject.h"
 #include "K2Node_MacroInstance.h"
 #include "ForEachLoopTranslatorObject.generated.h"
 
@@ -17,7 +17,7 @@
 
 
 UCLASS()
-class BLUEPRINTNATIVIZATIONV2_API UForEachLoopTranslatorObject : public UTranslatorBPToCppObject
+class BLUEPRINTNATIVIZATIONV2_API UForEachLoopTranslatorObject : public UForLoopTranslatorObject
 {
     GENERATED_BODY()
 
@@ -29,9 +29,9 @@ public:
         NodeNamesForCheck = TArray<FString>({ TEXT("ForEachLoop"), TEXT("ForEachLoopWithBreak") });
     }
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
-    virtual bool CanGenerateOutPinVariable(UEdGraphPin* Pin, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override;
 
     virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName) override
     {
@@ -48,6 +48,4 @@ public:
         return true;
     }
 
-private:
-    UK2Node* FindLastForLoopInStackNode(const TArray<FVisitedNodeStack>& VisitedNodes);
 };

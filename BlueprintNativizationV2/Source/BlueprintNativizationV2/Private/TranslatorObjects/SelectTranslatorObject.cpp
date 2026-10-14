@@ -8,48 +8,40 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FGenerateResultStruct USelectTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct USelectTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex,
+    TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
 {
-    if (UK2Node_Select* SelectNode = Cast<UK2Node_Select>(Node))
+    UK2Node_Select* Select = CastChecked<UK2Node_Select>(Node);
+    const FString ValueType = UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
+    const FGenerateResultStruct Index = Subsystem->GenerateInputParameterCodeForNode(Node, Select->GetIndexPin(), 0, MacroStack);
+    const FString IndexName = Subsystem->GetNodeStateName(Node, TEXT("SelectIndex"));
+    const FString ResultName = Subsystem->GetNodeStateName(Node, TEXT("SelectedValue"), true);
+    FString Content = FString::Format(TEXT("{0} {1}{};\n{\nconst auto {2} = {3};\n"),
+        { ValueType, ResultName, IndexName, Index.Code });
+    TArray<UEdGraphPin*> Options;
+    Select->GetOptionPins(Options);
+    FGenerationPreparations EmittedPreparations = Index.Preparations;
+    TArray<FString> OptionNames;
+    for (int32 OptionIndex = 0; OptionIndex < Options.Num(); ++OptionIndex)
     {
-        FName ElementCppType = *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
-
-        TArray<UEdGraphPin*> InputPins = UBlueprintNativizationLibrary::GetFilteredPins(
-            SelectNode,
-            EPinOutputOrInputFilter::Input,
-            EPinExcludeFilter::None,
-            EPinIncludeOnlyFilter::None
-        );
-
-        TSet<FString> Preparations;
-
-        TArray<FGenerateResultStruct> Elements;
-        for (UEdGraphPin* InputPin : InputPins)
-        {
-            if (InputPin->PinName == SelectNode->GetIndexPin()->PinName)
-                continue;
-
-            Elements.Add(NativizationV2Subsystem->GenerateInputParameterCodeForNode(SelectNode, InputPin, 0, MacroStack));
-            
-        }
-
-        FGenerateResultStruct IndexCode = NativizationV2Subsystem->GenerateInputParameterCodeForNode(SelectNode, SelectNode->GetIndexPin(), 0, MacroStack);
-        Preparations.Append(IndexCode.Preparations);
-
-        FString ElementsJoined;
-        for (int32 i = 0; i < Elements.Num(); ++i)
-        {
-            if (i > 0) ElementsJoined += TEXT(", ");
-            ElementsJoined += Elements[i].Code;
-            Preparations.Append(Elements[i].Preparations);
-        }
-
-        return FGenerateResultStruct(FString::Format(TEXT("TArray<{0}>{{1}}[{2}]"), {
-            ElementCppType.ToString(),
-            ElementsJoined,
-            IndexCode.Code
-            }), Preparations);
+        const FGenerateResultStruct Value = Subsystem->GenerateInputParameterCodeForNode(Node, Options[OptionIndex], 0, MacroStack);
+        const FString OptionName = Subsystem->GetNodeStateName(Node, FString::Format(TEXT("SelectOption{0}"), { OptionIndex }));
+        Content += FString::Format(TEXT("{0} const {1} = {2};\n"),
+            { ValueType, OptionName, Value.Code });
+        EmittedPreparations.Append(Value.Preparations);
+        OptionNames.Add(OptionName);
     }
-
-    return FGenerateResultStruct();
+    Content += FString::Format(TEXT("switch (static_cast<int64>({0}))\n{\n"), { IndexName });
+    for (int32 OptionIndex = 0; OptionIndex < Options.Num(); ++OptionIndex)
+    {
+        int64 OptionValue = OptionIndex;
+        if (const UEnum* Enumeration = Select->GetEnum())
+        {
+            OptionValue = Enumeration->GetValueByName(Options[OptionIndex]->PinName);
+        }
+        Content += FString::Format(TEXT("case {0}:\n{\n{1} = {2};\nbreak;\n}\n"), { OptionValue, ResultName, OptionNames[OptionIndex] });
+    }
+    Content += TEXT("default:\n{\nbreak;\n}\n}\n}\n");
+    EmittedPreparations.Add(Content);
+    return FGenerateResultStruct(ResultName, EmittedPreparations);
 }

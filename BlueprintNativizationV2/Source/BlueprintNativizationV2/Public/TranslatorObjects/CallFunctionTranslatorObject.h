@@ -21,15 +21,31 @@ class BLUEPRINTNATIVIZATIONV2_API UCallFunctionTranslatorObject : public UTransl
 
 public:
 
+    virtual bool ShouldExpandNode(UK2Node* Node) const override;
+
     UCallFunctionTranslatorObject()
     {
         ClassNodeForCheck = {UK2Node_CallFunction::StaticClass()};
         NodeNamesForCheck = { };
     }
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
-    virtual void BuildArgs(bool bIsStatic, FString& Code, TSet<FString>& Preparation, UK2Node_CallFunction* CallFuncNode, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
+    virtual FString GenerateInstanceFunctionCall(UK2Node_CallFunction* Call, const FString& Target, const FString& Arguments) const;
+
+    FString GenerateInstanceFunctionStatement(UK2Node_CallFunction* Call, const FString& Target,
+        const FString& Arguments, const FString& ResultName, const TArray<FString>& ArgumentExpressions,
+        UNativizationV2Subsystem* Subsystem) const;
+
+    FString AdaptReturnValue(UK2Node_CallFunction* Call, const FString& Expression, FGenerationPreparations& Preparations) const;
+
+    bool CanInlineArithmetic(UK2Node_CallFunction* Call, UK2Node* Consumer) const;
+
+    static bool HasContainerFunctionTranslation(UFunction* Function);
+
+    FString GenerateStaticFunctionCall(UFunction* Function, const FString& Arguments, const TArray<FString>* ArgumentExpressions = nullptr, UK2Node_CallFunction* Call = nullptr);
+
+    virtual void BuildArgs(bool bIsStatic, FString& Code, FGenerationPreparations& Preparation, UK2Node_CallFunction* CallFuncNode, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem, const TMap<FName, FString>& ArgumentOverrides = {}, TArray<FString>* ArgumentExpressions = nullptr);
 
     virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 

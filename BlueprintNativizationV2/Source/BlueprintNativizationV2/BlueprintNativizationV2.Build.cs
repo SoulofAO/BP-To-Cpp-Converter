@@ -5,12 +5,25 @@
  */
 
 using UnrealBuildTool;
+using System.IO;
 
 public class BlueprintNativizationV2 : ModuleRules
 {
 	public BlueprintNativizationV2(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+
+        bool bHasSemanticSearchApi = File.Exists(Path.Combine(EngineDirectory,
+            "Plugins/Experimental/SemanticSearch/Source/SemanticSearch/Public/ISemanticSearchModule.h"));
+        if (bHasSemanticSearchApi)
+        {
+            PrivateIncludePathModuleNames.Add("SemanticSearch");
+            PrivateDefinitions.Add("BPTOCPP_WITH_SEMANTIC_SEARCH=1");
+        }
+        else
+        {
+            PrivateDefinitions.Add("BPTOCPP_WITH_SEMANTIC_SEARCH=0");
+        }
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
@@ -39,11 +52,18 @@ public class BlueprintNativizationV2 : ModuleRules
 			new string[]
 			{
 				"CoreUObject",
+                "BlueprintSourceAnalysis",
 				"Engine",
 				"Slate",
 				"SlateCore",
+                "ApplicationCore",
 				"AssetRegistry",
+				"ContentBrowser",
+                "ContentBrowserData",
+				"Settings",
 				"BlueprintGraph",
+                "KismetCompiler",
+                "Kismet",
 				"UnrealEd",
 				"ToolMenus",
 				"EditorStyle",
@@ -54,10 +74,14 @@ public class BlueprintNativizationV2 : ModuleRules
 				"SlateCore",
 				"UMG",
 				"InputCore",
+                "GameplayTags",
+                "Niagara",
+                "AIModule",
 				"Json",
 				"DesktopPlatform",
 				"BlueprintEditorLibrary",
 				"InputBlueprintNodes",
+                "EnhancedInput",
 				"ControlRig",
 				"PropertyEditor",
                 "Blutility",

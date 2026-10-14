@@ -11,6 +11,7 @@
 #include "BlueprintNativizationData.h"
 #include "TranslatorObjects/BaseTranslatorObject.h"
 #include "K2Node_VariableGet.h"
+#include "K2Node_StructMemberGet.h"
 #include "VariableGetTranslatorObject.generated.h"
 
 /**
@@ -26,9 +27,11 @@ public:
 
     UVariableGetTranslatorObject()
     {
-        ClassNodeForCheck = {UK2Node_VariableGet::StaticClass()};
+        ClassNodeForCheck = {UK2Node_VariableGet::StaticClass(), UK2Node_StructMemberGet::StaticClass()};
         NodeNamesForCheck = { };
     }
+
+    virtual bool CanApply(UK2Node* Node) override;
 
     virtual FGenerateResultStruct  GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 

@@ -14,7 +14,7 @@ FGenerateResultStruct UMakeSetTranslatorObject::GenerateInputParameterCodeForNod
 	{
 		FName ElementCppType = *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
 		TArray<FString> Elements;
-		TSet<FString> Preparations;
+		FGenerationPreparations Preparations;
 
 		for (UEdGraphPin* ElementPin : MakeSetNode->Pins)
 		{

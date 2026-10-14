@@ -7,7 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "TranslatorObjects/BaseTranslatorObject.h"
+#include "TranslatorObjects/CallFunctionTranslatorObject.h"
 #include "K2Node_CallParentFunction.h"
 #include "CallParentTranslatorObject.generated.h"
 
@@ -15,7 +15,7 @@
  * 
  */
 UCLASS()
-class BLUEPRINTNATIVIZATIONV2_API UCallParentTranslatorObject : public UTranslatorBPToCppObject
+class BLUEPRINTNATIVIZATIONV2_API UCallParentTranslatorObject : public UCallFunctionTranslatorObject
 {
 	GENERATED_BODY()
 
@@ -25,5 +25,8 @@ class BLUEPRINTNATIVIZATIONV2_API UCallParentTranslatorObject : public UTranslat
 		NodeNamesForCheck = { };
 	}
 
-	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+public:
+    static FString GetParentMethodName(UK2Node_CallParentFunction* Call);
+
+    virtual FString GenerateInstanceFunctionCall(UK2Node_CallFunction* Call, const FString& Target, const FString& Arguments) const override;
 };

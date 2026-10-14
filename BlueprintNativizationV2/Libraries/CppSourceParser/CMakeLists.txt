@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.24)
+project(CppSourceParser VERSION 0.1.0 LANGUAGES CXX)
+
+add_library(CppSourceParser STATIC Private/CppSourceParser.cpp Private/CppTextLexer.cpp Private/CppCompilationDatabase.cpp Private/CppSourceIndex.cpp)
+target_compile_features(CppSourceParser PUBLIC cxx_std_17)
+target_include_directories(CppSourceParser PUBLIC Public)
+if(MSVC)
+    target_compile_options(CppSourceParser PRIVATE /W4 /utf-8)
+else()
+    target_compile_options(CppSourceParser PRIVATE -Wall -Wextra -Wpedantic)
+endif()

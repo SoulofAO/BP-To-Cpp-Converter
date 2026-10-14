@@ -6,23 +6,14 @@
 
 #include "TranslatorObjects/BreakStructTranslatorObject.h"
 #include "BlueprintNativizationLibrary.h"
+#include "BlueprintNativizationSettings.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "K2Node_CallFunction.h"
+#include "RetainedBlueprintGeneration.h"
 
 bool UBreakStructTranslatorObject::CanApply(UK2Node* Node)
 {
-    if (Super::CanApply(Node))
-    {
-        return true;
-    }
-    if (UK2Node_CallFunction* K2Node_CallFunction = Cast<UK2Node_CallFunction>(Node))
-    {
-        if (K2Node_CallFunction->GetTargetFunction()->HasMetaData(FName("NativeBreakFunc")))
-        {
-            return true;
-        }
-    }
-    return false;
+    return Super::CanApply(Node);
 }
 
 FGenerateResultStruct UBreakStructTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -40,7 +31,39 @@ FGenerateResultStruct UBreakStructTranslatorObject::GenerateInputParameterCodeFo
         {
             FProperty* Property = BreakStruct->StructType->FindPropertyByName(*CheckPin->GetName());
             FText Text = Property->GetDisplayNameText();
-            GenerateInputCodeStruct.Code += "." + UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
+            if (UBlueprintNativizationSettingsLibrary::FindStructTranslator(BreakStruct->StructType))
+            {
+                FStructTranslationRequest Request;
+                Request.Structure = BreakStruct->StructType;
+                Request.Operation = EStructTranslationOperation::ReadMember;
+                Request.MemberName = Property->GetFName();
+                Request.SourceExpression = TEXT("(") + GenerateInputCodeStruct.Code + TEXT(")");
+                GenerateInputCodeStruct.Code = UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
+            }
+            else
+            {
+                FGetterAndSetterPropertyDescriptor Descriptor;
+                if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(Property, Descriptor) &&
+                    !Descriptor.GetterPropertyFunctionName.IsEmpty())
+                {
+                    GenerateInputCodeStruct.Code = TEXT("(") + GenerateInputCodeStruct.Code + TEXT(").") + Descriptor.GetterPropertyFunctionName + TEXT("()");
+                }
+                else if (Property->GetOwnerStruct()->IsNative() &&
+                    Property->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPrivate | CPF_NativeAccessSpecifierProtected))
+                {
+                    const FString ValueType = UBlueprintNativizationLibrary::GetPropertyType(Property);
+                    const FString StructureType = UBlueprintNativizationLibrary::GetUniqueFieldName(Property->GetOwnerStruct());
+                    FString ReadValue = TEXT("([](const ") + StructureType + TEXT("& StructureValue)\n{\n") + ValueType + TEXT(" MemberValue{};\nFProperty* MemberProperty = FindFProperty<FProperty>(") + StructureType +
+                        TEXT("::StaticStruct(), ") + FRetainedBlueprintGeneration::Quote(Property->GetName()) +
+                        TEXT(");\nconst void* MemberAddress = MemberProperty->ContainerPtrToValuePtr<void>(&StructureValue);\n");
+                    ReadValue += FRetainedBlueprintGeneration::Transfer(Property, TEXT("MemberProperty"), TEXT("MemberAddress"), TEXT("MemberValue"), false);
+                    GenerateInputCodeStruct.Code = ReadValue + TEXT("return MemberValue;\n})(") + GenerateInputCodeStruct.Code + TEXT(")");
+                }
+                else
+                {
+                    GenerateInputCodeStruct.Code += TEXT(".") + UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
+                }
+            }
             CheckPin = CheckPin->ParentPin;
         }
 

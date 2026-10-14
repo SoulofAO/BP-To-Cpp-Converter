@@ -19,6 +19,7 @@
 #include "UObject/UObjectGlobals.h"
 #include "Misc/Optional.h"
 #include "BlueprintNativizationLibrary.h"
+#include "BlueprintNativizationV2.h"
 
 void FConversionDetailsFunctionCustomization::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 {
@@ -107,13 +108,13 @@ void FConversionDetailsFunctionCustomization::CustomizeDetails(IDetailLayoutBuil
 
 FReply FConversionDetailsFunctionCustomization::OnTransformOnlyFunctionToCodeButtonClicked()
 {
-	const UBlueprintNativizationV2EditorSettings* Settings = GetDefault<UBlueprintNativizationV2EditorSettings>();
-	FName SelectedNodeOriginalFunctionName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EditingNode.Get());
-
-	if (Settings->SetupActionObject)
+	if (!EditingNode.IsValid())
 	{
-		Cast<USetupActionObject>(Settings->SetupActionObject->GetDefaultObject())->ActionToNode("TransformOnlyFunctionToCode", SelectedNodeOriginalFunctionName, EditingNode->GetBlueprint());
+		return FReply::Handled();
 	}
+	FName SelectedNodeOriginalFunctionName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EditingNode.Get());
+	FModuleManager::LoadModuleChecked<FBlueprintNativizationV2Module>(TEXT("BlueprintNativizationV2"))
+        .OpenTool(EditingNode->GetBlueprint(), SelectedNodeOriginalFunctionName);
 
 	return FReply::Handled();
 }

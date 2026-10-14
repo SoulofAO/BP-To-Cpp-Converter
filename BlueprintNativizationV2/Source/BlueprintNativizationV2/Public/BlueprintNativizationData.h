@@ -47,7 +47,8 @@ struct FNativizationCode
 {
     GENERATED_BODY()
 public:
-    UObject* Object;
+    UPROPERTY(Transient)
+    TObjectPtr<UObject> Object = nullptr;
 
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Transient, Category = "NativizationCode")
     FString ObjectName;
@@ -68,6 +69,15 @@ struct FNativizationModuleResult
 public:
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Transient, Category = "NativizationModuleResult")
     bool Sucsess = false;
+
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "NativizationModuleResult")
+    bool bPartialSuccess = false;
+
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "NativizationModuleResult")
+    TArray<FString> GenerationErrors;
+
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "NativizationModuleResult")
+    TArray<TObjectPtr<UObject>> SkippedObjects;
 
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Transient, Category = "NativizationModuleResult")
     TArray<FNativizationCode> NativizationCodes;
@@ -125,7 +135,7 @@ public:
     FString ReturnType;
 
     UPROPERTY()
-    UK2Node* Node;
+    UK2Node* Node = nullptr;
 
     UPROPERTY()
     UFunction* OriginalUFunction = nullptr;
@@ -140,6 +150,10 @@ public:
 
     UPROPERTY()
     TArray<FString> CustomParametersString;
+
+    bool bIsLatentContinuation = false;
+      bool bRequiresReflection = false;
+    FString EntryPinName = TEXT("None");
 
     FORCEINLINE bool operator==(const FGenerateFunctionStruct& Other) const
     {
@@ -190,6 +204,71 @@ public:
 };
 
 USTRUCT()
+struct FGenerationPreparations
+{
+    GENERATED_BODY()
+
+    UPROPERTY()
+    TArray<FString> Instructions;
+
+    void Add(const FString& Instruction)
+    {
+        Instructions.AddUnique(Instruction);
+    }
+
+    void Append(const FGenerationPreparations& Other)
+    {
+        for (const FString& Instruction : Other.Instructions)
+        {
+            Add(Instruction);
+        }
+    }
+
+    bool Contains(const FString& Instruction) const
+    {
+        return Instructions.Contains(Instruction);
+    }
+
+    bool IsEmpty() const
+    {
+        return Instructions.IsEmpty();
+    }
+
+    void Reset()
+    {
+        Instructions.Reset();
+    }
+
+    FGenerationPreparations Difference(const FGenerationPreparations& Other) const
+    {
+        FGenerationPreparations Result;
+        for (const FString& Instruction : Instructions)
+        {
+            if (!Other.Contains(Instruction))
+            {
+                Result.Add(Instruction);
+            }
+        }
+        return Result;
+    }
+
+    const TArray<FString>& Array() const
+    {
+        return Instructions;
+    }
+
+    auto begin() const
+    {
+        return Instructions.begin();
+    }
+
+    auto end() const
+    {
+        return Instructions.end();
+    }
+};
+
+USTRUCT()
 struct FGenerateResultStruct
 {
 
@@ -200,10 +279,10 @@ public:
     FString Code;
 
     UPROPERTY()
-    TSet<FString> Preparations;
+    FGenerationPreparations Preparations;
 
     FGenerateResultStruct() = default;
-    FGenerateResultStruct(FString NewCode, TSet<FString> NewPreparations)
+    FGenerateResultStruct(FString NewCode, FGenerationPreparations NewPreparations)
         : Code(NewCode), Preparations(NewPreparations)
     {
     }

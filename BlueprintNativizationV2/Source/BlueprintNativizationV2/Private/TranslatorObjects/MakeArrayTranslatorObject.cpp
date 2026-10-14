@@ -15,13 +15,13 @@ FGenerateResultStruct UMakeArrayTranslatorObject::GenerateInputParameterCodeForN
 	{
 		FName ElementCppType = *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
 		TArray<FString> Elements;
-		TSet<FString> Preparations;
+		FGenerationPreparations Preparations;
 
 		for (UEdGraphPin* ElementPin : MakeArrayNode->Pins)
 		{
 			if (ElementPin->Direction == EGPD_Input)
 			{
-				FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeArrayNode, ElementPin, 0, MacroStack).Code;
+				FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeArrayNode, ElementPin, 0, MacroStack);
 
 				Preparations.Append(InputResultStruct.Preparations);
 				Elements.Add(InputResultStruct.Code);
@@ -35,7 +35,7 @@ FGenerateResultStruct UMakeArrayTranslatorObject::GenerateInputParameterCodeForN
 				ElementsJoined
 			});
 
-		return ArrayLiteral;
+		return FGenerateResultStruct(ArrayLiteral, Preparations);
 	}
 	return FGenerateResultStruct();
 }

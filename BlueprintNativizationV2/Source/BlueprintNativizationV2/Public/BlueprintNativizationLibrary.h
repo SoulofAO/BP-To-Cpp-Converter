@@ -12,12 +12,14 @@
 #include "K2Node_Composite.h"
 #include "BlueprintNativizationData.h"
 #include "Engine/SCS_Node.h"
-#include "EditorUtilityWidget.h"
-#include "EditorUtilityWidgetBlueprint.h"
 #include "BlueprintNativizationLibrary.generated.h"
 
 
 class UNativizationV2Subsystem;
+class UK2Node_Variable;
+class UK2Node_Event;
+class UEditorUtilityWidget;
+class UEditorUtilityWidgetBlueprint;
 const FName ConversionMetaKey(TEXT("ConversionFlag"));
 
 
@@ -26,6 +28,12 @@ class UBlueprintNativizationLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 public:
+    static bool RequiresPostCDOInitialization(FProperty* Property, const void* PropertyAddress, bool bIncludeNativeDependencies = true);
+    static FProperty* FindFunctionProperty(UFunction* Function, FName PropertyName, bool bParameter);
+    static FProperty* ResolveVariableProperty(UK2Node_Variable* Variable);
+
+    static FGenerateResultStruct GenerateVariableAccess(UK2Node_Variable* Variable, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem);
+
     //Find all Exec Non Pure Function
     static TArray<UK2Node*> GetAllExecuteNodesInFunction(UK2Node * EntryNode, TArray<FGenerateFunctionStruct> EntryNodes, FString EntryPinName = "None");
 
@@ -55,10 +63,13 @@ public:
     static UK2Node * FindEntryNodeByFunctionName(UBlueprint* Blueprint, const FName& TargetNodeName);
 
     static UFunction* FindFunctionByFunctionName(UBlueprint* Blueprint, const FName& TargetNodeName);
+    static UFunction* GetFunctionDeclaration(UFunction* Function);
 
     static FProperty * GetPropertyFromEntryNode(UK2Node * EntryNode, const FName& PropertyName);
 
     static UEdGraph* GetEdGraphByFunction(UFunction* Function);
+
+    static BLUEPRINTNATIVIZATIONV2_API bool ShouldGenerateEvent(const UK2Node_Event* Event);
 
     static TArray<UK2Node*> GetEntryNodesPerGraph(UEdGraph* EdGraph, bool IncludeMacro = true);
 
@@ -108,7 +119,7 @@ public:
 
     static FString GetLambdaUniqueVariableNameByFunction(FString MainName, UFunction* Function, TArray<FGenerateFunctionStruct> EntryNodes);
 
-    static FString GetLambdaUniqueVariableNameByClass(FString MainName, UClass* OwnerClass);
+    static FString GetLambdaUniqueVariableNameByClass(FString MainName, UClass* OwnerClass, const FString& SourceIdentity = FString());
 
     static bool IsNodeInCurrentFunctionNode(UK2Node* TargetNode, UK2Node* StartNode, TArray<FGenerateFunctionStruct> EntryNodes);
 
@@ -120,6 +131,8 @@ public:
     static bool IsModuleLoaded(const FName& ModuleName);
 
     static UFunction* GetRootFunctionDeclaration(const UFunction* Function);
+
+    static FString GetNetworkEventBodyName(UFunction* Function);
 
     static TArray<FName> GetAllPropertyNamesByStruct(UScriptStruct* Struct);
 
@@ -143,12 +156,17 @@ public:
 
     static bool IsAvailibleOneLineDefaultConstructorForProperty(FProperty* Property);
 
-    static FString GenerateOneLineDefaultConstructorForProperty(FProperty* Property, bool LeftAllAssetRefInBlueprint, void* PropertyAddress);
+    static FString GetEnumValueName(const UEnum* Enumeration, int64 Value);
+    static FString GenerateEnumLiteral(const UEnum* Enumeration, int64 Value);
+
+    static FString GenerateTextLiteral(const FText& Value, const FString& TextNamespace = FString(), const FString& TextName = FString());
+
+    static FString GenerateOneLineDefaultConstructorForProperty(FProperty* Property, bool LeftAllAssetRefInBlueprint, void* PropertyAddress, const FString& ObjectOuter = TEXT("this"));
 
     static UEdGraph* GetConstructionGraph(UBlueprint* Blueprint);
 
     //GENERATE CONSTRUCTOR ONLY FOR UCLASS CONSTRUCTOR OR PIN CONSTRUCTOR
-    static FString GenerateManyLinesDefaultConstructorForProperty(FProperty* Property, void* PropertyAddress, void* SuperPropertyAddress, TArray<FGenerateFunctionStruct> EntryNodes, UClass* Class, bool FullInitialize, bool LeftAllAssetRefInBlueprint, FString PrefixComponentName, FString& NewPropertyName);
+    static FString GenerateManyLinesDefaultConstructorForProperty(FProperty* Property, void* PropertyAddress, void* SuperPropertyAddress, TArray<FGenerateFunctionStruct> EntryNodes, UClass* Class, bool FullInitialize, bool LeftAllAssetRefInBlueprint, FString PrefixComponentName, FString& NewPropertyName, const FString& ObjectOuter = TEXT("this"));
 
     static FString ProcessFloatStrings(const FString& Input);
 
@@ -171,12 +189,12 @@ public:
     static void ReplaceReferencesToTypeObjectTest(UObject* OldType, UObject* NewType);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
-    static void ReplaceReferencesToType(UField* OldType, UField* NewType, TArray<UBlueprint*>& Blueprints);
+    static void ReplaceReferencesToType(UField* OldType, UField* NewType, TArray<UBlueprint*>& Blueprints, bool bDeferReconstruction = false, bool bReplaceParentClass = true);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static UBlueprint* GetBlueprintFromAsset(UObject* Asset);
 
-    static bool DoesPropertyContainAssetReference(FProperty* Property, const void* ContainerPtr);
+    BLUEPRINTNATIVIZATIONV2_API static bool DoesPropertyContainAssetReference(FProperty* Property, const void* ContainerPtr);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static void ClearBlueprint(UBlueprint* Blueprint);
@@ -200,6 +218,7 @@ public:
     static FString GetPinType(FEdGraphPinType& PinType, bool HideUselessTypeDeclaration);
 
     static FString GetPropertyType(FProperty* Property);
+    static FString ConvertArrayValue(UEdGraphPin* SourcePin, const FEdGraphPinType& TargetType, const FString& Expression);
 
     static TArray<FProperty*> GetExposeOnSpawnProperties(UClass* Class);
 
@@ -242,6 +261,8 @@ public:
 
     static UEdGraphPin * GetFirstNonKnotPin(UEdGraphPin* Pin, int Index, bool IgnoreMacro, TArray<UK2Node*>& MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
 
+    static BLUEPRINTNATIVIZATIONV2_API FString ValidateBlueprintSources(const TArray<UObject*>& InputTargets);
+
     //Depedence
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     static TSet<UObject*> GetAllDependencies(UObject* InputTarget, TArray<TSubclassOf<UObject>> IgnoreClasses, TArray<UObject*> IgnoreObjects);
@@ -257,13 +278,14 @@ public:
 
     static TArray<UActorComponent*> GetClassComponentTemplates(TArray<FName>& FoundComponentNames, const TSubclassOf<AActor> ActorClass, const TSubclassOf<UActorComponent> ComponentClass, bool bIgnoreSuperClasses = false);
 
-    static USceneComponent* GetParentComponentTemplate(UActorComponent* ActorComponent);
+    static BLUEPRINTNATIVIZATIONV2_API USceneComponent* GetParentComponentTemplate(UActorComponent* ActorComponent);
+    static BLUEPRINTNATIVIZATIONV2_API FName GetComponentAttachmentSocketName(UActorComponent* ActorComponent);
 
-    static bool IsRootComponentTemplate(UActorComponent* ActorComponent);
+    BLUEPRINTNATIVIZATIONV2_API static bool IsRootComponentTemplate(UActorComponent* ActorComponent);
 
     static FName GetRealBPPropertyName(UActorComponent* ActorComponent);
 
-    static FString GetUniquePropertyComponentGetterName(UActorComponent* ActorComponent, const TArray<FGenerateFunctionStruct>& EntryNodes);
+    static FString GetUniquePropertyComponentGetterName(UActorComponent* ActorComponent, const TArray<FGenerateFunctionStruct>& EntryNodes, FString* ComponentPropertyName = nullptr);
 
     static UActorComponent * GetComponentByPropertyName(FString PropertyName, UBlueprint * Blueprint);
 

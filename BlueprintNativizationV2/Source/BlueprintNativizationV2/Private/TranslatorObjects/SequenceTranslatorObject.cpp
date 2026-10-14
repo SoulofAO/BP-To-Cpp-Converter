@@ -8,7 +8,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString USequenceTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString USequenceTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	FString Content;
 
@@ -18,9 +18,16 @@ FString USequenceTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString E
 	{
 		if (OutPin->PinName.ToString().StartsWith("Then") && OutPin->LinkedTo.Num() > 0)
 		{
-			UK2Node* NextNode = Cast<UK2Node>(OutPin->LinkedTo[0]->GetOwningNode());
-			FString NextPinName = OutPin->LinkedTo[0]->GetName();
-			Content += NativizationV2Subsystem->GenerateCodeFromNode(NextNode, NextPinName, VisitedNodes, Preparations, MacroStack) + "\n";
+            TArray<UK2Node*> BranchMacroStack = MacroStack;
+            UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(OutPin, 0, false, BranchMacroStack, NativizationV2Subsystem);
+            if (!NextPin)
+            {
+                continue;
+            }
+            UK2Node* NextNode = Cast<UK2Node>(NextPin->GetOwningNode());
+            FString NextPinName = NextPin->GetName();
+			FGenerationPreparations BranchPreparations = Preparations;
+			Content += TEXT("{\n") + NativizationV2Subsystem->GenerateCodeFromNode(NextNode, NextPinName, VisitedNodes, BranchPreparations, BranchMacroStack) + TEXT("\n}\n");
 		}
 	}
 

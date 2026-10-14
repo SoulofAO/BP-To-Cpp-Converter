@@ -11,6 +11,7 @@
 #include "Subsystems/EngineSubsystem.h"
 #include "BlueprintNativizationData.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "UObject/FieldPath.h"
 #include "BlueprintNativizationUniqueNameSubsystem.generated.h"
 
 class UK2Node;
@@ -20,7 +21,7 @@ class UEdGraphPin;
 struct FNodeNamePair
 {
 public:
-	UK2Node* Node = nullptr;
+	TObjectPtr<UK2Node> Node = nullptr;
 	FName Name;
 
 	bool operator==(const FNodeNamePair& Other) const
@@ -37,15 +38,20 @@ public:
 struct FPropertyNamePair
 {
 public:
-	FProperty* Property = nullptr;
+	TFieldPath<FProperty> Property;
+    TObjectPtr<UObject> PropertyOwner = nullptr;
 	UEdGraphPin* GraphPin = nullptr;
 	FName Name;
-	UK2Node* LambdaNode = nullptr;
+	TObjectPtr<UK2Node> LambdaNode = nullptr;
 	FString LambdaMainName;
 
 	FPropertyNamePair(FProperty* NewProperty, UEdGraphPin* NewGraphPin, FName NewName, UK2Node* NewLambdaNode, FString NewLambdaMainName)
 	{
 		Property = NewProperty;
+        if (NewProperty)
+        {
+            PropertyOwner = NewProperty->GetOwnerUObject();
+        }
 		GraphPin = NewGraphPin;
 		Name = NewName;
 		LambdaNode = NewLambdaNode;
@@ -74,7 +80,7 @@ struct FRegisterNameField
 {
 public:
 	FName Name;
-	UField* Field = nullptr;
+	TObjectPtr<UField> Field = nullptr;
 
 	FRegisterNameField(FName NewName, UField* NewField)
 	{
@@ -94,7 +100,7 @@ public:
 	{
 		Class = NewClass;
 	}
-	UClass* Class = nullptr;
+	TObjectPtr<UClass> Class = nullptr;
 	TMap<FName, int> UniqueFunctionCounter;
 
 	TArray<FNodeNamePair> NodeNamePairs;
@@ -117,9 +123,9 @@ public:
 		IsConstructorVar = NewIsConstructorVar;
 	}
 
-	UClass* Class;
-	UFunction* Function = nullptr;
-	UK2Node* GeneratedFunctionEntryNode = nullptr;
+	TObjectPtr<UClass> Class;
+	TObjectPtr<UFunction> Function = nullptr;
+	TObjectPtr<UK2Node> GeneratedFunctionEntryNode = nullptr;
 	bool IsConstructorVar = true;
 
 	TMap<FName, int> Counters;
@@ -141,17 +147,25 @@ class UBlueprintNativizationUniqueNameSubsystem: public UEngineSubsystem
 public:
 	FString SanitizeIdentifier(const FString& Input);
 
+    static void AddReferencedObjects(UObject* Object, FReferenceCollector& Collector);
+
 	FString GetDefaultBaseName(UField* Field);
 
 	FName GetUniqueFieldName(UField* Field);
 
 	TArray<FName> GetAllFieldNames();
 
+    void BeginNameLookup();
+    void EndNameLookup();
+    bool IsFieldNameUsed(FName Name);
+
 	TArray<FName> GetAllFunctionNames(UClass* Class);
 
 	TArray<FName> GetAllClassGlobalPropertyNames(UClass* Class);
 
 	FName GetUniqueFunctionName_Internal(UK2Node* EntryNode, FString BaseFunctionName);
+
+	void RegisterFunctionAlias(UK2Node* OriginalNode, UK2Node* ExpandedNode);
 
 	FName GetUniqueFunctionName(UFunction* Function, FString PredictName);
 
@@ -166,15 +180,15 @@ public:
 
 	FName GetLambdaUniqueVariableName(FString LambdaMainName, UFunction* Function, TArray<FGenerateFunctionStruct> EntryNodes);
 
-	FName GetLambdaUniqueVariableName(FString LambdaMainName, UClass* OwningClass);
+	FName GetLambdaUniqueVariableName(FString LambdaMainName, UClass* OwningClass, const FString& SourceIdentity = FString());
 
-	FName GenerateUniqueLambdaVariableName(const FString& LambdaMainName, UClass* OwningClass, UFunction* OwningFunction, UK2Node* LambdaNode, UK2Node* EntryNode);
+	FName GenerateUniqueLambdaVariableName(const FString& LambdaMainName, UClass* OwningClass, UFunction* OwningFunction, UK2Node* LambdaNode, UK2Node* EntryNode, const FString& SourceIdentity = FString());
 
 	FName GenerateConstructorLambdaUniqueVariableName(FString LambdaMainName, UClass* Class);
 
 	FName GetUniquePinVariableName(UEdGraphPin* Pin, TArray<FGenerateFunctionStruct> EntryNodes);
 
-	bool CheckUnquieVarName(FString CheckName, UClass* Class);
+	bool CheckUnquieVarName(FString CheckName, UClass* Class, const FRegisterVariable* VariableScope = nullptr);
 
 	void Reset();
 
@@ -186,4 +200,12 @@ public:
 	TArray<FRegisterNameFunction> UniqueFunctionNameArray;
 
 	TArray<FRegisterVariable> UniqueVarNamesArray;
+
+private:
+    FString GetModuleQualifiedFieldName(UField* Field, const FString& BaseName);
+    FString GetSourceNameConflict(UField* Field, const FString& Name) const;
+    bool bNameLookupActive = false;
+    TSet<FName> NativeFieldNames;
+    TMap<FString, FString> SourceNameConflicts;
+    TMap<FString, FName> PreviousFieldNames;
 };

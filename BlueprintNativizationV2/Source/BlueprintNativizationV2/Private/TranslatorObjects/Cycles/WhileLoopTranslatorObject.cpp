@@ -7,39 +7,44 @@
 #include "TranslatorObjects/Cycles/WhileLoopTranslatorObject.h"
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
+#include "UObject/Package.h"
 
-FString UWhileTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UWhileTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes,
+    TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* Subsystem)
 {
-    if (UK2Node_MacroInstance* MacroNode = Cast<UK2Node_MacroInstance>(Node))
+    FGenerateResultStruct Condition;
     {
-        UEdGraph* MacroGraph = MacroNode->GetMacroGraph();
-
-        TSet<FString> LocalPreparations = Preparations;
-        FGenerateResultStruct ConditionExpirationResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Condition"),0, MacroStack);
-		LocalPreparations.Append(ConditionExpirationResultStruct.Preparations);
-
-        UEdGraphPin* BodyPin = MacroNode->FindPin(TEXT("LoopBody"));
-        UEdGraphPin* EndPin = MacroNode->FindPin(TEXT("Completed"));
-
-        FString LoopBodyCode = "";
-        FString LoopEndCode = "";
-
-        if (BodyPin->LinkedTo.Num() > 0 && BodyPin->LinkedTo[0])
-        {
-            UK2Node* BodyNode = Cast<UK2Node>(BodyPin->LinkedTo[0]->GetOwningNode());
-            LoopBodyCode = *NativizationV2Subsystem->GenerateCodeFromNode(BodyNode, BodyPin->LinkedTo[0]->GetName(), VisitedNodes, LocalPreparations, MacroStack);
-        }
-        if (EndPin->LinkedTo.Num() > 0 && EndPin->LinkedTo[0])
-        {
-            UK2Node* EndNode = Cast<UK2Node>(EndPin->LinkedTo[0]->GetOwningNode());
-            LoopEndCode = *NativizationV2Subsystem->GenerateCodeFromNode(EndNode, BodyPin->LinkedTo[0]->GetName(), VisitedNodes, LocalPreparations, MacroStack);
-        }
-
-        FString Content;
-		Content += GenerateNewPreparations(Preparations, LocalPreparations);
-        Content += FString::Format(TEXT("while ({0})\n{\n{1}\n}\n {2}\n"),  {*ConditionExpirationResultStruct.Code, *LoopBodyCode, *LoopEndCode});
-
-        return Content;
+        TGuardValue<FString> EvaluationScope(Subsystem->InputEvaluationPurpose, TEXT("LoopCondition"));
+        TGuardValue<TMap<UK2Node*, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<UK2Node*, FGenerateResultStruct>());
+        Condition = Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Condition")), 0, MacroStack);
     }
-    return "";
+    FString BodyCode;
+    TArray<UK2Node*> BodyStack = MacroStack;
+    if (UEdGraphPin* Body = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Node->FindPin(TEXT("LoopBody")), 0, false, BodyStack, Subsystem))
+    {
+        FGenerationPreparations BodyPreparations = Preparations;
+        BodyCode = Subsystem->GenerateCodeFromNode(Cast<UK2Node>(Body->GetOwningNode()), Body->GetName(), VisitedNodes, BodyPreparations, BodyStack);
+    }
+    FString Content;
+    if (Condition.Preparations.IsEmpty())
+    {
+        Content = FString::Format(TEXT("while ({0})\n{\n{1}\n}\n"), { Condition.Code, BodyCode });
+    }
+    else
+    {
+        Content = FString::Format(TEXT("while (true)\n{\n{0}\nif (!({1}))\n{\nbreak;\n}\n{2}\n}\n"),
+            {FString::Join(Condition.Preparations.Array(), TEXT("\n")), Condition.Code, BodyCode});
+    }
+    if (UEdGraphPin* Completed = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Node->FindPin(TEXT("Completed")), 0, false, MacroStack, Subsystem))
+    {
+        Content += Subsystem->GenerateCodeFromNode(Cast<UK2Node>(Completed->GetOwningNode()), Completed->GetName(), VisitedNodes, Preparations, MacroStack);
+    }
+    return Content;
+}
+
+bool UWhileTranslatorObject::CanApply(UK2Node* Node)
+{
+    UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Node);
+    return Macro && Macro->GetMacroGraph() &&
+        Macro->GetMacroGraph()->GetOutermost()->GetName() == TEXT("/Engine/EditorBlueprintResources/StandardMacros") && Super::CanApply(Node);
 }

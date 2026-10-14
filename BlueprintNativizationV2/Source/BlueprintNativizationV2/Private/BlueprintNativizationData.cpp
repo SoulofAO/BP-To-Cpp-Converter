@@ -19,57 +19,86 @@
 
 FString UBlueprintNativizationDataLibrary::FormatNamespaceCodeStyle(FString& Input)
 {
-	FString Output;
-	int32 IndentLevel = 0;
-
-	TArray<FString> Lines;
-	Input.ParseIntoArrayLines(Lines, false);
-
-	for (FString& Line : Lines)
-	{
-		Line = Line.TrimStartAndEnd();
-
-		if (Line == TEXT("public:") || Line == TEXT("protected:") || Line == TEXT("private:"))
-		{
-			Output += Line + TEXT("\n");
-			continue;
-		}
-
-		// ������� ���������� ����������� � ����������� ������ � ������
-		int32 OpenBraces = 0;
-		int32 CloseBraces = 0;
-
-		for (int32 i = 0; i < Line.Len(); ++i)
-		{
-			if (Line[i] == '{') ++OpenBraces;
-			else if (Line[i] == '}') ++CloseBraces;
-		}
-
-		// ��������� ������� ������� �� ������ ������, ���� ������ �������� ����������� ������
-		// ��� ���������������� ���������� �����������
-		if (CloseBraces > OpenBraces)
-		{
-			IndentLevel -= (CloseBraces - OpenBraces);
-			IndentLevel = FMath::Max(IndentLevel, 0);
-		}
-
-		FString AppendSpace;
-		for (int x = 0; x < IndentLevel; x++)
-		{
-			AppendSpace += TEXT("   ");
-		}
-		Output += AppendSpace + Line + TEXT("\n");
-
-		// ����������� ������� ������� ����� ������
-		if (OpenBraces > CloseBraces)
-		{
-			IndentLevel += (OpenBraces - CloseBraces);
-		}
-	}
-
-	return Output;
+    FString Output;
+    int32 IndentLevel = 0;
+    TMap<int32, FString> AccessSections;
+    bool bPreviousBlank = false;
+    TArray<FString> Lines;
+    Input.ParseIntoArrayLines(Lines, false);
+    for (FString Line : Lines)
+    {
+        Line.TrimStartAndEndInline();
+        if (Line.IsEmpty())
+        {
+            bPreviousBlank = true;
+            continue;
+        }
+        if (bPreviousBlank && !Output.IsEmpty() && !Line.StartsWith(TEXT("}")) && !Output.EndsWith(TEXT("{\n")))
+        {
+            Output += TEXT("\n");
+        }
+        bPreviousBlank = false;
+        int32 OpenBraces = 0;
+        int32 CloseBraces = 0;
+        TCHAR Quote = 0;
+        for (int32 Position = 0; Position < Line.Len(); ++Position)
+        {
+            const TCHAR Character = Line[Position];
+            if (Quote != 0)
+            {
+                if (Character == TEXT('\\'))
+                {
+                    ++Position;
+                }
+                else if (Character == Quote)
+                {
+                    Quote = 0;
+                }
+                continue;
+            }
+            if (Character == TEXT('"') || Character == TEXT('\''))
+            {
+                Quote = Character;
+            }
+            else if (Character == TEXT('/') && Position + 1 < Line.Len() && Line[Position + 1] == TEXT('/'))
+            {
+                break;
+            }
+            else if (Character == TEXT('{'))
+            {
+                ++OpenBraces;
+            }
+            else if (Character == TEXT('}'))
+            {
+                ++CloseBraces;
+            }
+        }
+        if (CloseBraces > OpenBraces)
+        {
+            const int32 PreviousIndent = IndentLevel;
+            IndentLevel = FMath::Max(0, IndentLevel - CloseBraces + OpenBraces);
+            for (int32 ScopeDepth = IndentLevel + 1; ScopeDepth <= PreviousIndent; ++ScopeDepth)
+            {
+                AccessSections.Remove(ScopeDepth);
+            }
+        }
+        if (Line == TEXT("public:") || Line == TEXT("protected:") || Line == TEXT("private:"))
+        {
+            if (AccessSections.FindRef(IndentLevel) != Line)
+            {
+                AccessSections.Add(IndentLevel, Line);
+                Output += Line + TEXT("\n");
+            }
+            continue;
+        }
+        Output += FString::ChrN(IndentLevel * 3, TEXT(' ')) + Line + TEXT("\n");
+        if (OpenBraces > CloseBraces)
+        {
+            IndentLevel += OpenBraces - CloseBraces;
+        }
+    }
+    return Output;
 }
-
 
 FString UBlueprintNativizationDataLibrary::CutBeforeAndIncluding(const FString& Source, const FString& ToFind)
 {

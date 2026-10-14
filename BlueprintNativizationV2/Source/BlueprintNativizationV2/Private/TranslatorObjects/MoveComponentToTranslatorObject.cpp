@@ -13,13 +13,13 @@
 FString UMoveComponentToTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 	FString EntryPinName,
 	TArray<FVisitedNodeStack> VisitedNodes,
-	TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+	TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	FString Content;
 
 	if (EntryPinName == "Move")
 	{
-		TSet<FString>  NewPreparations;
+		FGenerationPreparations  NewPreparations;
 		FGenerateResultStruct TargetComponent = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "Component"), 0, MacroStack);
 		FGenerateResultStruct TargetRelativeLocation = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "TargetRelativeLocation"), 0, MacroStack);
 		FGenerateResultStruct TargetRelativeRotation = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, UBlueprintNativizationLibrary::GetPinByName(Node->Pins, "TargetRelativeRotation"), 0, MacroStack);

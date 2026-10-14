@@ -5,105 +5,88 @@
  */
 
 #include "TranslatorObjects/TimelineTranslatorObject.h"
-#include "K2Node_Timeline.h"
 #include "BlueprintNativizationSubsystem.h"
-#include "Components/TimelineComponent.h"
-#include "Engine/TimelineTemplate.h"
-#include "AssetRegistry/AssetRegistryModule.h"
-#include "UObject/SavePackage.h"
 #include "BlueprintNativizationLibrary.h"
+#include "Engine/TimelineTemplate.h"
+#include "Curves/CurveFloat.h"
 #include "Curves/CurveVector.h"
 #include "Curves/CurveLinearColor.h"
+#include "RetainedBlueprintGeneration.h"
+#include "NativeApiCatalog.h"
+#include "Components/TimelineComponent.h"
 
-
-FString UTimelineTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+void UTimelineTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path,
+    TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* Subsystem)
 {
-	FString Content;
- 
-    if (UK2Node_Timeline* Timeline = Cast<UK2Node_Timeline>(Node))
+    UK2Node_Timeline* Timeline = CastChecked<UK2Node_Timeline>(InputNode);
+    for (UEdGraphPin* Pin : Timeline->Pins)
     {
-        FString TimelineComponentName = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByNode("Timeline", Node, NativizationV2Subsystem->EntryNodes);
-
-        Node->Pins;
-
-        if (EntryPinName == "Play")
+        if (Pin->Direction != EGPD_Output || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
         {
-            Content += FString::Format(TEXT("{0}->Play();"), { TimelineComponentName });
+            continue;
         }
-        else if (EntryPinName == "Play from Start")
+        TArray<UK2Node*> MacroStack;
+        UEdGraphPin* Target = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin, 0, false, MacroStack, Subsystem);
+        if (!Target)
         {
-            Content += FString::Format(TEXT("{0}->PlayFromStart();"), { TimelineComponentName });
+            continue;
         }
-        else if (EntryPinName == "Stop")
+        if (EntryNodes.ContainsByPredicate([&](const FGenerateFunctionStruct& Entry)
         {
-            Content += FString::Format(TEXT("{0}->Stop();"), { TimelineComponentName });
-        }
-        else if (EntryPinName == "Reverse")
+            return Entry.Node == Target->GetOwningNode() && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName();
+        }))
         {
-            Content += FString::Format(TEXT("{0}->Reverse();"), { TimelineComponentName });
+            continue;
         }
-        else if (EntryPinName == "Reverse from End")
-        {
-            Content += FString::Format(TEXT("{0}->ReverseFromEnd();"), { TimelineComponentName });
-        }
-        else if (EntryPinName == "Set New Time")
-        {
-            UEdGraphPin* NewTimePin = Node->FindPin(TEXT("SetNewTime"));
-            FGenerateResultStruct FloatInputResult = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, NewTimePin, 0, MacroStack);
-            Content += GenerateNewPreparations(Preparations, FloatInputResult.Preparations);
-            Content += FString::Format(TEXT("{0}->SetNewTime({1});"), { TimelineComponentName,  FloatInputResult.Code});
-        }
+        FGenerateFunctionStruct Entry;
+        Entry.Node = CastChecked<UK2Node>(Target->GetOwningNode());
+        Entry.Name = *Subsystem->GetNodeStateName(Entry.Node, Timeline->TimelineName.ToString() + Pin->GetName());
+        Entry.bIsLatentContinuation = true;
+        Entry.EntryPinName = Target->GetName();
+        EntryNodes.Add(Entry);
     }
-
-	return Content;
 }
 
-FString UTimelineTranslatorObject::GenerateGlobalVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UTimelineTranslatorObject::GenerateGlobalVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* Subsystem)
 {
-    FString Content;
+    return FString();
+}
 
-    if (UK2Node_Timeline* Timeline = Cast<UK2Node_Timeline>(InputNode))
+FString UTimelineTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName,
+    TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations,
+    UNativizationV2Subsystem* Subsystem)
+{
+    UK2Node_Timeline* Timeline = CastChecked<UK2Node_Timeline>(Node);
+    const FString Variable = UBlueprintNativizationLibrary::GetUniquePropertyName(
+        FindFProperty<FProperty>(Node->GetBlueprint()->GeneratedClass, Timeline->TimelineName));
+    const TMap<FString, FString> Methods = {
+        { TEXT("Play"), TEXT("Play") }, { TEXT("PlayFromStart"), TEXT("PlayFromStart") },
+        { TEXT("Stop"), TEXT("Stop") }, { TEXT("Reverse"), TEXT("Reverse") },
+        { TEXT("ReverseFromEnd"), TEXT("ReverseFromEnd") }, { TEXT("SetNewTime"), TEXT("SetNewTime") }
+    };
+    EntryPinName.ReplaceInline(TEXT(" "), TEXT(""));
+    const FString* Method = Methods.Find(EntryPinName);
+    if (!Method)
     {
-        UTimelineTemplate* TimelineTemplate = InputNode->GetBlueprint()->FindTimelineTemplateByVariableName(Timeline->TimelineName);
-        FString TimelineVar = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass("Timeline", InputNode->GetBlueprint()->GeneratedClass);
-
-        TSet<UCurveBase*> InOutCurves;
-        TimelineTemplate->GetAllCurves(InOutCurves);
-
-        for (UCurveBase* Curve : InOutCurves)
-        {
-            FString VarType = "";
-
-            if (UCurveFloat* CurveFloat = Cast<UCurveFloat>(Curve))
-            {
-                VarType = "float";
-            }
-            else if (UCurveVector* CurveVector = Cast<UCurveVector>(Curve))
-            {
-                VarType = "FVector";
-            }
-            else if (UCurveLinearColor* CurveLinearColor = Cast<UCurveLinearColor>(Curve))
-            {
-                VarType = "FLinearColor";
-            }
-            Content += VarType + " " + UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(Curve->GetName(), InputNode->GetBlueprint()->GeneratedClass) + ";\n";
-        }
+        return FString();
     }
-
-    Content += FString::Format(TEXT("UPROPERTY(EditAnywhere, BlueprintReadOnly) \n UTimelineComponent* {1};\n"),
-        { UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass("Timeline", InputNode->GetBlueprint()->GeneratedClass)});
-    Content += FString::Format(TEXT("UPROPERTY() \n ETimelineDirection {1};\n"),
-        { UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass("TimelineDirection",InputNode->GetBlueprint()->GeneratedClass)});
-
-    return Content;
+    FString Arguments;
+    FString Content;
+    if (*Method == TEXT("SetNewTime"))
+    {
+        const FGenerateResultStruct Time = Subsystem->GenerateInputParameterCodeForNode(Node, Timeline->GetNewTimePin(), 0, MacroStack);
+        Content = GenerateNewPreparations(Preparations, Time.Preparations);
+        Preparations.Append(Time.Preparations);
+        Arguments = Time.Code;
+    }
+    return Content + Variable + TEXT("->") + *Method + TEXT("(") + Arguments + TEXT(");\n");
 }
 
 UCurveBase* UTimelineTranslatorObject::GetCurveByName(UK2Node_Timeline* Timeline, FString Name)
 {
-    TSet<UCurveBase*> InOutCurves;
-    UTimelineTemplate* TimelineTemplate = Timeline->GetBlueprint()->FindTimelineTemplateByVariableName(Timeline->TimelineName);
-    TimelineTemplate->GetAllCurves(InOutCurves);
-    for (UCurveBase* Curve : InOutCurves)
+    TSet<UCurveBase*> Curves;
+    Timeline->GetBlueprint()->FindTimelineTemplateByVariableName(Timeline->TimelineName)->GetAllCurves(Curves);
+    for (UCurveBase* Curve : Curves)
     {
         if (Curve->GetName() == Name)
         {
@@ -113,286 +96,236 @@ UCurveBase* UTimelineTranslatorObject::GetCurveByName(UK2Node_Timeline* Timeline
     return nullptr;
 }
 
-FString UTimelineTranslatorObject::GenerateConstruction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UTimelineTranslatorObject::GenerateConstruction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* Subsystem)
 {
-    FString Content;
-
-    if (UK2Node_Timeline* Timeline = Cast<UK2Node_Timeline>(InputNode))
+    UK2Node_Timeline* Timeline = CastChecked<UK2Node_Timeline>(InputNode);
+    UTimelineTemplate* Definition = Timeline->GetBlueprint()->FindTimelineTemplateByVariableName(Timeline->TimelineName);
+    auto PropertyName = [&](FName Name)
     {
-        UTimelineTemplate* TimelineTemplate = InputNode->GetBlueprint()->FindTimelineTemplateByVariableName(Timeline->TimelineName);
-
-        FString TimelineVar = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass("Timeline", InputNode->GetBlueprint()->GeneratedClass);
-
-        Content += FString::Format(TEXT("UTimelineComponent* {0} = CreateDefaultSubobject<UTimelineComponent>(TEXT(\"T{1}\"));\n"),
-            { *TimelineVar, *Timeline->TimelineName.ToString() });
-
-        TSet<UCurveBase*> InOutCurves;
-        TimelineTemplate->GetAllCurves(InOutCurves);
-
-        int32 CurveIndex = 0;
-        if (NativizationV2Subsystem->LeftAllAssetRefInBlueprint)
+        return UBlueprintNativizationLibrary::GetUniquePropertyName(FindFProperty<FProperty>(InputNode->GetBlueprint()->GeneratedClass, Name));
+    };
+    const FString Variable = PropertyName(Timeline->TimelineName);
+    FString Content = FString::Format(TEXT("{0} = CreateDefaultSubobject<UTimelineComponent>(TEXT(\"{1}\"));\n"),
+        { Variable, Timeline->TimelineName.ToString().ReplaceCharWithEscapedChar() });
+    Content += Variable + TEXT("->SetPropertySetObject(this);\n");
+    FRetainedBlueprintGeneration::AddInstanceInitialization(Variable + TEXT("->SetPropertySetObject(this);\n"));
+    Content += Variable + TEXT("->SetDirectionPropertyName(TEXT(\"") + PropertyName(Definition->GetDirectionPropertyName()) + TEXT("\"));\n");
+    Content += Variable + TEXT("->SetTimelineLength(") + FString::SanitizeFloat(Definition->TimelineLength) + TEXT("f);\n");
+    Content += Variable + TEXT("->SetTimelineLengthMode(") + UBlueprintNativizationLibrary::GenerateEnumLiteral(StaticEnum<ETimelineLengthMode>(), Definition->LengthMode) + TEXT(");\n");
+    Content += Variable + TEXT("->SetLooping(") + LexToString(bool(Definition->bLoop)) + TEXT(");\n");
+    Content += Variable + TEXT("->SetIgnoreTimeDilation(") + LexToString(bool(Definition->bIgnoreTimeDilation)) + TEXT(");\n");
+    Content += Variable + TEXT("->SetIsReplicated(") + LexToString(bool(Definition->bReplicated)) + TEXT(");\n");
+    Content += Variable + TEXT("->PrimaryComponentTick.TickGroup = ") + UBlueprintNativizationLibrary::GenerateEnumLiteral(StaticEnum<ETickingGroup>(), Definition->TimelineTickGroup) + TEXT(";\n");
+    auto SerializeCurve = [&](const FRichCurve& Curve, const FString& Destination)
+    {
+        FString Text;
+        FRichCurve::StaticStruct()->ExportText(Text, &Curve, nullptr, nullptr, PPF_None, nullptr);
+        return TEXT("FRichCurve::StaticStruct()->ImportText(TEXT(\"") + Text.ReplaceCharWithEscapedChar() + TEXT("\"), &") +
+            Destination + TEXT(", nullptr, PPF_None, nullptr, TEXT(\"TimelineCurve\"));\n");
+    };
+    auto AddCurve = [&](UCurveBase* Curve, const FTTPropertyTrack& Track, const FString& Type, const FString& Kind)
+    {
+        if (!Curve)
         {
-            for (UCurveBase* InOutCurve : InOutCurves)
-            {
-                FString BaseName = Timeline->TimelineName.ToString();
-                FString AssetBase = FString::Format(TEXT("{0}_Curve{1}"), { *BaseName, FString::FromInt(CurveIndex) });
-                FString PackageName = FString::Format(TEXT("/Game/SavedCurves/{0}"), { *AssetBase });
-                UPackage* Package = CreatePackage(*PackageName);
-
-                FName DuplicateName = FName(*AssetBase);
-                UCurveBase* Duplicate = DuplicateObject(InOutCurve, Package, DuplicateName);
-
-                FAssetRegistryModule::AssetCreated(Duplicate);
-                Duplicate->MarkPackageDirty();
-
-                FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
-                FSavePackageArgs Args;
-                UPackage::SavePackage(Package, Duplicate, *PackageFileName, Args);
-
-                FString AssetPath = FString::Format(TEXT("/Game/SavedCurves/{0}.{0}"), { *AssetBase });
-                FString CurveVarName = FString::Format(TEXT("{0}_GeneratedCurve{1}"), { *TimelineVar, FString::FromInt(CurveIndex) });
-
-                Content += FString::Format(TEXT("UCurveBase* {0} = LoadObject<UCurveBase>(nullptr, TEXT(\"{1}\"));\n"),
-                    { *CurveVarName, *AssetPath });
-
-                Content += FString::Format(TEXT("if({0} == nullptr) { UE_LOG(LogTemp, Warning, TEXT(\"Failed to load curve {1}\")); }\n"),
-                    { *CurveVarName, *AssetPath });
-
-                CurveIndex++;
-            }
+            return;
+        }
+        const FString CurveName = Subsystem->GetNodeStateName(Timeline, Track.GetTrackName().ToString() + TEXT("Curve"));
+        if (Track.bIsExternalCurve)
+        {
+            Content += TEXT("auto* ") + CurveName + TEXT(" = CreateDefaultSubobject<") + Type + TEXT(">(TEXT(\"") + CurveName + TEXT("\"));\n");
+            const FString Asset = FRetainedBlueprintGeneration::GetAssetValue(Curve, Curve->GetClass());
+            FRetainedBlueprintGeneration::AddInstanceInitialization(FString::Format(
+                TEXT("{0}->Set{1}Curve({2}, TEXT(\"{3}\"));\n"),
+                {Variable, Kind, Asset, Track.GetTrackName().ToString().ReplaceCharWithEscapedChar()}));
         }
         else
         {
-            for (UCurveBase* InOutCurve : InOutCurves)
+            Content += TEXT("auto* ") + CurveName + TEXT(" = CreateDefaultSubobject<") + Type + TEXT(">(TEXT(\"") + CurveName + TEXT("\"));\n");
+            if (UCurveFloat* FloatCurve = Cast<UCurveFloat>(Curve))
             {
-                if (UCurveFloat* FloatCurve = Cast<UCurveFloat>(InOutCurve))
-                {
-                    FString NewCurveVar = FloatCurve->GetName();
-
-                    Content += FString::Format(TEXT("UCurveFloat* {0} = NewObject<UCurveFloat>(this, UCurveFloat::StaticClass());\n"),
-                        { *NewCurveVar });
-
-                    const FRichCurve& Src = FloatCurve->FloatCurve;
-                    for (const FRichCurveKey& Key : Src.Keys)
-                    {
-                        FString TimeStr = FString::SanitizeFloat(Key.Time);
-                        FString ValueStr = FString::SanitizeFloat(Key.Value);
-
-                        Content += FString::Format(TEXT("{0}->FloatCurve.AddKey({1}f, {2}f);\n"),
-                            { *NewCurveVar, *TimeStr, *ValueStr });
-                    }
-                }
-                else if (UCurveVector* VecCurve = Cast<UCurveVector>(InOutCurve))
-                {
-                    FString NewCurveVar = VecCurve->GetName();
-                    Content += FString::Format(TEXT("UCurveVector* {0} = NewObject<UCurveVector>(this, UCurveVector::StaticClass());\n"),
-                        { *NewCurveVar });
-
-                    const FRichCurve& SrcX = VecCurve->FloatCurves[0];
-                    const FRichCurve& SrcY = VecCurve->FloatCurves[1];
-                    const FRichCurve& SrcZ = VecCurve->FloatCurves[2];
-
-                    for (const FRichCurveKey& Key : SrcX.Keys)
-                    {
-                        FString TimeStr = FString::SanitizeFloat(Key.Time);
-                        float ValX = Key.Value;
-                        float ValY = SrcY.Eval(Key.Time);
-                        float ValZ = SrcZ.Eval(Key.Time);
-
-                        FString ValXStr = FString::SanitizeFloat(ValX);
-                        FString ValYStr = FString::SanitizeFloat(ValY);
-                        FString ValZStr = FString::SanitizeFloat(ValZ);
-
-                        Content += FString::Format(TEXT("{0}->FloatCurves[0].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValXStr });
-                        Content += FString::Format(TEXT("{0}->FloatCurves[1].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValYStr });
-                        Content += FString::Format(TEXT("{0}->FloatCurves[2].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValZStr });
-                    }
-
-
-                }
-                else if (UCurveLinearColor* CurveLinearColor = Cast<UCurveLinearColor>(InOutCurve))
-                {
-                    FString NewCurveVar = CurveLinearColor->GetName();
-                    Content += FString::Format(TEXT("UCurveLinearColor* {0} = NewObject<UCurveLinearColor>(this, UCurveLinearColor::StaticClass());\n"),
-                        { *NewCurveVar });
-
-                    const FRichCurve& SrcR = CurveLinearColor->FloatCurves[0];
-                    const FRichCurve& SrcG = CurveLinearColor->FloatCurves[1];
-                    const FRichCurve& SrcB = CurveLinearColor->FloatCurves[2];
-                    const FRichCurve& SrcA = CurveLinearColor->FloatCurves[3];
-
-                    for (const FRichCurveKey& Key : SrcR.Keys)
-                    {
-                        FString TimeStr = FString::SanitizeFloat(Key.Time);
-                        float ValR = Key.Value;
-                        float ValG = SrcG.Eval(Key.Time);
-                        float ValB = SrcB.Eval(Key.Time);
-                        float ValA = SrcA.Eval(Key.Time);
-                        FString ValRStr = FString::SanitizeFloat(ValR);
-                        FString ValGStr = FString::SanitizeFloat(ValG);
-                        FString ValBStr = FString::SanitizeFloat(ValB);
-                        FString ValAStr = FString::SanitizeFloat(ValA);
-                        Content += FString::Format(TEXT("{0}->FloatCurves[0].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValRStr });
-                        Content += FString::Format(TEXT("{0}->FloatCurves[1].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValGStr });
-                        Content += FString::Format(TEXT("{0}->FloatCurves[2].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValBStr });
-                        Content += FString::Format(TEXT("{0}->FloatCurves[3].AddKey({1}f, {2}f);\n"), { *NewCurveVar, *TimeStr, *ValAStr });
-                    }
-                }
-                else
-                {
-                    Content += FString::Format(TEXT("UE_LOG(LogTemp, Warning, TEXT(\"Unsupported curve type for timeline {0}\"));\n"), { *Timeline->TimelineName.ToString() });
-                }
-
-                CurveIndex++;
+                Content += SerializeCurve(FloatCurve->FloatCurve, CurveName + TEXT("->FloatCurve"));
             }
-        }
-
-        UEdGraphPin* UpdateExecPin = Timeline->FindPin(TEXT("Update"));
-        UEdGraphPin* FinishExecPin = Timeline->FindPin(TEXT("Update"));
-
-        TArray<UK2Node*> EmptyMacroStack;
-        UEdGraphPin* NextUpdateExecPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(UpdateExecPin, 0, true, EmptyMacroStack, NativizationV2Subsystem);
-        UEdGraphPin* NextFinishExecPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(UpdateExecPin, 0, true, EmptyMacroStack, NativizationV2Subsystem);
-        
-        TArray<UEdGraphPin*> OutPins = UBlueprintNativizationLibrary::GetFilteredPins(Timeline, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::ExecPin, EPinIncludeOnlyFilter::None);
-
-        bool AnyPinLinked = false;
-        for (UEdGraphPin* OutPin : OutPins)
-        {
-            if (UBlueprintNativizationLibrary::CheckAnySubPinLinked(OutPin))
+            else if (UCurveVector* VectorCurve = Cast<UCurveVector>(Curve))
             {
-                AnyPinLinked = true;
-            }
-        }
-        
-        if (NextUpdateExecPin || AnyPinLinked)
-        {
-            FString UpdateEntryName = UBlueprintNativizationLibrary::GetUniqueEntryNodeName(Cast<UK2Node>(NextUpdateExecPin->GetOwningNode()), NativizationV2Subsystem->EntryNodes, TEXT("UpdateTimeline"));
-            FString WorldTickHandleVarName = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(Timeline->GetClass(), "WorldTickHandle");
-
-
-            FString UpdateCurvesCode;
-            UpdateCurvesCode += "TSet<UCurveBase*> InOutCurves;";
-
-            for (UCurveBase* Curve : InOutCurves)
-            {
-                FString Name = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(Curve->GetName(), InputNode->GetBlueprint()->GeneratedClass);
-
-                if (Cast<UCurveFloat>(Curve))
+                for (int32 AxisIndex = 0; AxisIndex < 3; ++AxisIndex)
                 {
-                    UpdateCurvesCode += FString::Format(TEXT(
-                    "InOutCurves.Empty();\n"
-                        "{0}->GetAllCurves(InOutCurves);\n"
-                        "for(UCurveBase* Curve: InOutCurves)\n"
-                        "{\n"
-                        "if(Curve->GetName() == {1})\n"
-                        "{\n"
-                        "if (UCurveFloat* FloatCurve = Cast<UCurveFloat>(InOutCurve))\n"
-                        "{\n"
-                        "{1} = Curve->GetFloatValue({0}->GetPlaybackPosition());\n"
-                        "}\n"
-                        "}\n"
-                        "}\n"
-                    ), { TimelineVar, Curve->GetName() });
-                }
-                else if (Cast<UCurveVector>(Curve))
-                {
-                    UpdateCurvesCode += FString::Format(TEXT(
-                        "InOutCurves.Empty();\n"
-                        "{0}->GetAllCurves(InOutCurves);\n"
-                        "for(UCurveBase* Curve: InOutCurves)\n"
-                        "{\n"
-                        "if(Curve->GetName() == {1})\n"
-                        "{\n"
-                        "if (UCurveVector* VectorCurve = Cast<UCurveVector>(InOutCurve))\n"
-                        "{\n"
-                        "{1} = Curve->GetVectorValue({0}->GetPlaybackPosition());\n"
-                        "}\n"
-                        "}\n"
-                        "}\n"
-                    ), { TimelineVar, Curve->GetName() });
-                }
-                else if (Cast<UCurveLinearColor>(Curve))
-                {
-                    UpdateCurvesCode += FString::Format(TEXT(
-                        "InOutCurves.Empty();\n"
-                        "{0}->GetAllCurves(InOutCurves);\n"
-                        "for(UCurveBase* Curve: InOutCurves)\n"
-                        "{\n"
-                        "if(Curve->GetName() == {1})\n"
-                        "{\n"
-                        "if (UCurveLinearColor* LinearColorCurve = Cast<UCurveLinearColor>(InOutCurve))\n"
-                        "{\n"
-                        "{1} = Curve->GetLinearColorValue({0}->GetPlaybackPosition());\n"
-                        "}\n"
-                        "}\n"
-                        "}\n"
-                    ), { TimelineVar, Curve->GetName() });
+                    Content += SerializeCurve(VectorCurve->FloatCurves[AxisIndex], CurveName + TEXT("->FloatCurves[") + FString::FromInt(AxisIndex) + TEXT("]"));
                 }
             }
-
-
-            Content += FString::Format(TEXT(
-                    "{0} = FWorldDelegates::OnWorldTickStart.AddLambda([{2}](UWorld* World, ELevelTick TickType, float DeltaSeconds)\n"
-                    "{\n"
-                    "    if (!World || TickType != LEVELTICK_All) return;\n"
-                    "    if ({2})\n"
-                    "    {\n"
-                    "        if({2}->IsPlaying()) \n"
-                    "        {\n"
-                    "           {3}\n"
-                    "           {1}();\n"
-                    "        }\n"
-                    "    }\n"
-                    "    else\n"
-                    "    {\n"
-                    "        FWorldDelegates::OnWorldTickStart.Remove({1});\n"
-                    "        {1}.Reset();\n"
-                    "    }\n"
-                    "});\n"
-                ), { *WorldTickHandleVarName ,*UpdateEntryName, TimelineVar, UpdateCurvesCode });
-
+            else if (UCurveLinearColor* ColorCurve = Cast<UCurveLinearColor>(Curve))
+            {
+                for (int32 ChannelIndex = 0; ChannelIndex < 4; ++ChannelIndex)
+                {
+                    Content += SerializeCurve(ColorCurve->FloatCurves[ChannelIndex], CurveName + TEXT("->FloatCurves[") + FString::FromInt(ChannelIndex) + TEXT("]"));
+                }
+            }
         }
-        if (NextFinishExecPin)
+        Content += Variable + TEXT("->AddInterp") + Kind + TEXT("(") + CurveName + TEXT(", FOnTimeline") + Kind + TEXT("(), TEXT(\"") +
+            PropertyName(Track.GetPropertyName()) + TEXT("\"), TEXT(\"") + Track.GetTrackName().ToString().ReplaceCharWithEscapedChar() + TEXT("\"));\n");
+    };
+    for (const FTTFloatTrack& Track : Definition->FloatTracks)
+    {
+        AddCurve(Track.CurveFloat, Track, TEXT("UCurveFloat"), TEXT("Float"));
+    }
+    for (const FTTVectorTrack& Track : Definition->VectorTracks)
+    {
+        AddCurve(Track.CurveVector, Track, TEXT("UCurveVector"), TEXT("Vector"));
+    }
+    for (const FTTLinearColorTrack& Track : Definition->LinearColorTracks)
+    {
+        AddCurve(Track.CurveLinearColor, Track, TEXT("UCurveLinearColor"), TEXT("LinearColor"));
+    }
+    const bool bHasExternalEvents = Definition->EventTracks.ContainsByPredicate([](const FTTEventTrack& Track)
+    {
+        return Track.bIsExternalCurve;
+    });
+    FString EventInitialization;
+    if (bHasExternalEvents)
+    {
+        FStructProperty* TimelineProperty = FindFProperty<FStructProperty>(UTimelineComponent::StaticClass(), TEXT("TheTimeline"));
+        FArrayProperty* EventsProperty = FindFProperty<FArrayProperty>(FTimeline::StaticStruct(), TEXT("Events"));
+        FStructProperty* EventProperty = nullptr;
+        if (EventsProperty)
         {
-            FString FinishEntryName = UBlueprintNativizationLibrary::GetUniqueEntryNodeName(Cast<UK2Node>(NextFinishExecPin->GetOwningNode()), NativizationV2Subsystem->EntryNodes, TEXT("FinishTimeline"));
-            FString FinishedFunctionVarName = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(Timeline->GetClass(), "FinishedFunction");
-            
-            Content += FString::Format(TEXT(
-                "FOnTimelineEvent {0};"
-                "{0}.BindUFunction(this, FName(\"{1}\"));"
-                "{2}->SetTimelineFinishedFunc({0});"
-            ), { FinishedFunctionVarName, FinishEntryName, TimelineVar});
+            EventProperty = CastField<FStructProperty>(EventsProperty->Inner);
         }
+        if (!TimelineProperty || TimelineProperty->Struct != FTimeline::StaticStruct() ||
+            !EventProperty || EventProperty->Struct != FTimelineEventEntry::StaticStruct())
+        {
+            FNativeApiCatalog::AddError(FString::Format(
+                TEXT("Cannot rebuild external timeline events because the reflected timeline event storage is unavailable: {0}, timeline {1}."),
+                {Timeline->GetBlueprint()->GetPathName(), Timeline->TimelineName.ToString()}));
+            return Content;
+        }
+        const FString TimelinePropertyName = Subsystem->GetNodeStateName(Timeline, TEXT("EventTimelineProperty"));
+        const FString TimelineStateName = Subsystem->GetNodeStateName(Timeline, TEXT("EventTimelineState"));
+        const FString EventsPropertyName = Subsystem->GetNodeStateName(Timeline, TEXT("TimelineEventsProperty"));
+        const FString EventsName = Subsystem->GetNodeStateName(Timeline, TEXT("TimelineEvents"));
+        EventInitialization = FString::Format(
+            TEXT("FStructProperty* {0} = FindFProperty<FStructProperty>(UTimelineComponent::StaticClass(), TEXT(\"TheTimeline\"));\n")
+            TEXT("FTimeline* {1} = {0}->ContainerPtrToValuePtr<FTimeline>({2});\n")
+            TEXT("FArrayProperty* {3} = FindFProperty<FArrayProperty>(FTimeline::StaticStruct(), TEXT(\"Events\"));\n")
+            TEXT("FScriptArrayHelper {4}({3}, {3}->ContainerPtrToValuePtr<void>({1}));\n")
+            TEXT("{4}.EmptyValues();\n"),
+            {TimelinePropertyName, TimelineStateName, Variable, EventsPropertyName, EventsName});
+    }
+    for (UEdGraphPin* Pin : Timeline->Pins)
+    {
+        if (Pin->Direction != EGPD_Output || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+        {
+            continue;
+        }
+        TArray<UK2Node*> MacroStack;
+        UEdGraphPin* Target = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin, 0, false, MacroStack, Subsystem);
+        if (!Target)
+        {
+            continue;
+        }
+        const FGenerateFunctionStruct* Entry = Subsystem->EntryNodes.FindByPredicate([&](const FGenerateFunctionStruct& Candidate)
+        {
+            return Candidate.Node == Target->GetOwningNode() && Candidate.bIsLatentContinuation && Candidate.EntryPinName == Target->GetName();
+        });
+        const FString Callback = Subsystem->GetNodeStateName(Timeline, Pin->GetName() + TEXT("Callback"));
+        const FString CallbackInitialization = TEXT("FOnTimelineEvent ") + Callback + TEXT(";\n") + Callback + TEXT(".BindUFunction(this, TEXT(\"") + Entry->Name.ToString() + TEXT("\"));\n");
+        if (Pin->PinName == TEXT("Update"))
+        {
+            Content += CallbackInitialization;
+            Content += Variable + TEXT("->SetTimelinePostUpdateFunc(") + Callback + TEXT(");\n");
+        }
+        else if (Pin->PinName == TEXT("Finished"))
+        {
+            Content += CallbackInitialization;
+            Content += Variable + TEXT("->SetTimelineFinishedFunc(") + Callback + TEXT(");\n");
+        }
+        else
+        {
+            FString TrackInitialization = CallbackInitialization;
+            for (const FTTEventTrack& Track : Definition->EventTracks)
+            {
+                if (Track.GetTrackName() == Pin->PinName && Track.CurveKeys)
+                {
+                    if (Track.bIsExternalCurve)
+                    {
+                        const FString Asset = FRetainedBlueprintGeneration::GetAssetValue(Track.CurveKeys, UCurveFloat::StaticClass());
+                        const FString CurveName = Subsystem->GetNodeStateName(Timeline, Track.GetTrackName().ToString() + TEXT("EventCurve"));
+                        const FString KeyName = Subsystem->GetNodeStateName(Timeline, Track.GetTrackName().ToString() + TEXT("EventCurveKey"));
+                        TrackInitialization += FString::Format(
+                            TEXT("if (UCurveFloat* {0} = {1})\n{\n")
+                            TEXT("for (const FRichCurveKey& {2} : {0}->FloatCurve.GetConstRefOfKeys())\n{\n")
+                            TEXT("{3}->AddEvent({2}.Time, {4});\n}\n}\n"),
+                            {CurveName, Asset, KeyName, Variable, Callback});
+                    }
+                    else
+                    {
+                        for (const FRichCurveKey& Key : Track.CurveKeys->FloatCurve.GetConstRefOfKeys())
+                        {
+                            TrackInitialization += Variable + TEXT("->AddEvent(") + FString::SanitizeFloat(Key.Time) + TEXT("f, ") + Callback + TEXT(");\n");
+                        }
+                    }
+                }
+            }
+            if (bHasExternalEvents)
+            {
+                EventInitialization += TrackInitialization;
+            }
+            else
+            {
+                Content += TrackInitialization;
+            }
+        }
+    }
+    if (bHasExternalEvents)
+    {
+        FRetainedBlueprintGeneration::AddInstanceInitialization(EventInitialization);
+    }
+    if (Definition->bAutoPlay)
+    {
+        Content += Variable + TEXT("->Play();\n");
     }
     return Content;
 }
 
-
-
 bool UTimelineTranslatorObject::CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName)
 {
-	return false;
+    return false;
 }
 
-TSet<FString> UTimelineTranslatorObject::GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)
+TSet<FString> UTimelineTranslatorObject::GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem)
 {
-	return {"#include \"Components/TimelineComponent.h\""};
+    return { TEXT("#include \"Components/TimelineComponent.h\"") };
 }
 
-FGenerateResultStruct UTimelineTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
+TSet<FString> UTimelineTranslatorObject::GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem)
 {
-    if (UK2Node_Timeline* Timeline = Cast<UK2Node_Timeline>(Node))
+    return { TEXT("#include \"Curves/CurveFloat.h\""), TEXT("#include \"Curves/CurveVector.h\""), TEXT("#include \"Curves/CurveLinearColor.h\""), TEXT("#include \"UObject/UnrealType.h\"") };
+}
+
+FGenerateResultStruct UTimelineTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin,
+    int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
+{
+    UK2Node_Timeline* Timeline = CastChecked<UK2Node_Timeline>(Node);
+    UTimelineTemplate* Definition = Timeline->GetBlueprint()->FindTimelineTemplateByVariableName(Timeline->TimelineName);
+    FName Name = Definition->GetDirectionPropertyName();
+    for (const FTTFloatTrack& Track : Definition->FloatTracks)
     {
-        if (Pin->GetName() == "Direction")
+        if (Track.GetTrackName() == Pin->PinName)
         {
-            return UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass("TimelineDirection", Timeline->GetBlueprint()->GeneratedClass);
-        }
-        else
-        {
-            return UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(Pin->GetName(), Timeline->GetBlueprint()->GeneratedClass);
+            Name = Track.GetPropertyName();
         }
     }
-
-	return FGenerateResultStruct();
+    for (const FTTVectorTrack& Track : Definition->VectorTracks)
+    {
+        if (Track.GetTrackName() == Pin->PinName)
+        {
+            Name = Track.GetPropertyName();
+        }
+    }
+    for (const FTTLinearColorTrack& Track : Definition->LinearColorTracks)
+    {
+        if (Track.GetTrackName() == Pin->PinName)
+        {
+            Name = Track.GetPropertyName();
+        }
+    }
+    return UBlueprintNativizationLibrary::GetUniquePropertyName(FindFProperty<FProperty>(Node->GetBlueprint()->GeneratedClass, Name));
 }

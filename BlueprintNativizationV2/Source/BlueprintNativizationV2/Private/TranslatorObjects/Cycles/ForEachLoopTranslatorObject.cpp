@@ -8,82 +8,81 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 
-FString UForEachLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
-    FString EntryPinName,
-    TArray<FVisitedNodeStack> VisitedNodes,
-    TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+FGenerateResultStruct UForEachLoopTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex,
+    TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
 {
-	if (UK2Node_MacroInstance* MacroNode = Cast<UK2Node_MacroInstance>(Node))
-	{
-		UEdGraph* MacroGraph = MacroNode->GetMacroGraph();
-		if (MacroGraph)
-		{
-			FString MacroName = MacroGraph->GetName();
-
-			if (EntryPinName == "Break")
-			{
-				if (FindLastForLoopInStackNode(VisitedNodes) == MacroNode)
-				{
-					return "break; \n" ;
-				}
-				else
-				{
-					UE_LOG(LogTemp, Warning, TEXT("SOME STRANGE CIRCLE BREAK USE"));
-				}
-			}
-
-			UEdGraphPin* ArrayPin = MacroNode->FindPin(TEXT("Array"));
-			UEdGraphPin* ArrayElementPin = MacroNode->FindPin(TEXT("Array Element"));
-			UEdGraphPin* ArrayIndexPin = MacroNode->FindPin(TEXT("Array Index"));
-
-			UEdGraphPin* LoopBodyPin = MacroNode->FindPin(TEXT("LoopBody"));
-			if (LoopBodyPin->LinkedTo.Num() > 0)
-			{
-
-				UK2Node* BodyNode = LoopBodyPin && LoopBodyPin->LinkedTo.Num() > 0
-					? Cast<UK2Node>(LoopBodyPin->LinkedTo[0]->GetOwningNode()) : nullptr;
-
-				FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MacroNode, ArrayPin, 0, MacroStack);
-				TSet<FString> LocalPreparations;
-				LocalPreparations.Append(GenerateResultStruct.Preparations);
-
-				FString Content;
-				Content += GenerateNewPreparations(Preparations, LocalPreparations);
-
-				Content += FString::Format(TEXT("{0}\nfor ({1} {2}: {3})\n{\n{4}\n\n{5}}"),
-					{
-				    FString::Format(TEXT("{0} {1} = 0;\n\n"), {"int32", UBlueprintNativizationLibrary::GetUniquePinName(ArrayIndexPin, NativizationV2Subsystem->EntryNodes)}),
-					ArrayElementPin->PinType.PinCategory.ToString(),
-					UBlueprintNativizationLibrary::GetUniquePinName(ArrayElementPin, NativizationV2Subsystem->EntryNodes),
-					GenerateResultStruct.Code,
-					*NativizationV2Subsystem->GenerateCodeFromNode(BodyNode, LoopBodyPin->LinkedTo[0]->GetName(), VisitedNodes, LocalPreparations, MacroStack),
-					FString(UBlueprintNativizationLibrary::GetUniquePinName(ArrayIndexPin, NativizationV2Subsystem->EntryNodes) + "++;")
-					});
-
-				return Content;
-			}
-		}
-	}
-	return "";
+    if (Pin->PinName != TEXT("Array Element"))
+    {
+        return UBlueprintNativizationLibrary::GetUniquePinName(Pin, Subsystem->EntryNodes);
+    }
+    const FGenerateResultStruct Array = Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Array")), 0, MacroStack);
+    const FString IndexName = UBlueprintNativizationLibrary::GetUniquePinName(Node->FindPin(TEXT("Array Index")), Subsystem->EntryNodes);
+    FString ElementName = Subsystem->GetNodeStateName(Node, TEXT("ArrayElement"), true);
+    if (Subsystem->DataConsumer)
+    {
+        ElementName = Subsystem->GetNodeStateName(Subsystem->DataConsumer, Subsystem->InputEvaluationPurpose + ElementName, true);
+    }
+    const FString ArrayName = ElementName + TEXT("Values");
+    const FString ElementType = UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
+    FGenerateResultStruct Result(ElementName, Array.Preparations);
+    Result.Preparations.Add(FString::Format(TEXT("{0} {1}{};\n{\nconst auto& {2} = {3};\nif ({2}.IsValidIndex({4}))\n{\n{1} = {2}[{4}];\n}\n}\n"),
+        { ElementType, ElementName, ArrayName, Array.Code, IndexName }));
+    return Result;
 }
 
-bool UForEachLoopTranslatorObject::CanGenerateOutPinVariable(UEdGraphPin* Pin, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UForEachLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes,
+    TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* Subsystem)
 {
-	return false;
-}
-
-UK2Node* UForEachLoopTranslatorObject::FindLastForLoopInStackNode(const TArray<FVisitedNodeStack>& VisitedNodes)
-{
-	for (int32 i = VisitedNodes.Num() - 1; i >= 0; --i)
-	{
-		const FVisitedNodeStack& StackNode = VisitedNodes[i];
-		if (UK2Node_MacroInstance* MacroInstance = Cast<UK2Node_MacroInstance>(StackNode.Node))
-		{
-			if (StackNode.Node && NodeNamesForCheck.Contains(MacroInstance->GetMacroGraph()->GetName()))
-			{
-				return StackNode.Node;
-			}
-		}
-	}
-	return nullptr;
+    const FString BreakName = Subsystem->GetNodeStateName(Node, TEXT("BreakRequested"));
+    if (EntryPinName == TEXT("Break"))
+    {
+        return GenerateBreak(Node, Subsystem);
+    }
+    const bool bHasBreak = Node->FindPin(TEXT("Break")) != nullptr;
+    const FString IndexName = UBlueprintNativizationLibrary::GetUniquePinName(Node->FindPin(TEXT("Array Index")), Subsystem->EntryNodes);
+    const FString IterationName = Subsystem->GetNodeStateName(Node, TEXT("Iteration"));
+    FGenerateResultStruct Array;
+    {
+        TGuardValue<FString> EvaluationScope(Subsystem->InputEvaluationPurpose, TEXT("LoopCondition"));
+        TGuardValue<TMap<UK2Node*, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<UK2Node*, FGenerateResultStruct>());
+        Array = Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Array")), 0, MacroStack);
+    }
+    FString Length = FString::Format(TEXT("({0}).Num()"), { Array.Code });
+    FString Condition = IterationName + TEXT(" < ") + Length;
+    FString Content = IndexName + TEXT(" = 0;\n");
+    if (bHasBreak)
+    {
+        Content += BreakName + TEXT(" = false;\n");
+        Condition = TEXT("!") + BreakName + TEXT(" && (") + Condition + TEXT(")");
+    }
+    FString BodyCode;
+    TArray<UK2Node*> BodyStack = MacroStack;
+    if (UEdGraphPin* Body = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Node->FindPin(TEXT("LoopBody")), 0, false, BodyStack, Subsystem))
+    {
+        TArray<UK2Node*> ActiveLoops = Subsystem->ActiveLoopNodes;
+        ActiveLoops.Add(Node);
+        TGuardValue<TArray<UK2Node*>> LoopScope(Subsystem->ActiveLoopNodes, MoveTemp(ActiveLoops));
+        FGenerationPreparations BodyPreparations = Preparations;
+        BodyCode = Subsystem->GenerateCodeFromNode(Cast<UK2Node>(Body->GetOwningNode()), Body->GetName(), VisitedNodes, BodyPreparations, BodyStack);
+    }
+    if (Array.Preparations.IsEmpty())
+    {
+        Content += FString::Format(TEXT("for (int32 {0} = 0; {1}; ++{0})\n{\n{2} = {0};\n{3}\n}\n"), { IterationName, Condition, IndexName, BodyCode });
+    }
+    else
+    {
+        FString CheckCode;
+        if (bHasBreak)
+        {
+            CheckCode = FString::Format(TEXT("if ({0})\n{\nbreak;\n}\n"), {BreakName});
+        }
+        CheckCode += FString::Join(Array.Preparations.Array(), TEXT("\n"));
+        CheckCode += FString::Format(TEXT("\nif (!({0} < {1}))\n{\nbreak;\n}\n"), {IterationName, Length});
+        Content += FString::Format(TEXT("for (int32 {0} = 0; ; ++{0})\n{\n{1}\n{2} = {0};\n{3}\n}\n"), {IterationName, CheckCode, IndexName, BodyCode});
+    }
+    if (UEdGraphPin* Completed = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Node->FindPin(TEXT("Completed")), 0, false, MacroStack, Subsystem))
+    {
+        Content += Subsystem->GenerateCodeFromNode(Cast<UK2Node>(Completed->GetOwningNode()), Completed->GetName(), VisitedNodes, Preparations, MacroStack);
+    }
+    return Content;
 }

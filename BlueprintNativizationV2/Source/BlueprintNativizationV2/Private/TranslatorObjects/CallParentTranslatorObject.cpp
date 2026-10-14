@@ -5,49 +5,75 @@
  */
 
 #include "TranslatorObjects/CallParentTranslatorObject.h"
-#include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
+#include "BlueprintNativizationSettings.h"
+#include "ConstructionScriptTranslation.h"
+#include "Engine/Blueprint.h"
 
-FString UCallParentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UCallParentTranslatorObject::GetParentMethodName(UK2Node_CallParentFunction* Call)
 {
-	if (UK2Node_CallParentFunction* CallParentFunction = Cast<UK2Node_CallParentFunction>(Node))
-	{
-		UFunction* Function = CallParentFunction->GetTargetFunction();
-		if (Function)
-		{
-			FString Args;
-			TSet<FString> NewPreparations;
-			for (TFieldIterator<FProperty> ParamIt(Function); ParamIt && (ParamIt->PropertyFlags & CPF_Parm); ++ParamIt)
-			{
-				UEdGraphPin* Pin = UBlueprintNativizationLibrary::GetPinByName(CallParentFunction->Pins, ParamIt->GetNameCPP());
+    UFunction* Function = Call->GetTargetFunction();
+    const FString NetworkEventBody = UBlueprintNativizationLibrary::GetNetworkEventBodyName(Function);
+    if (!NetworkEventBody.IsEmpty())
+    {
+        return NetworkEventBody + TEXT("_Implementation");
+    }
+    FString MethodName = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, TEXT(""));
+    if (MethodName.IsEmpty() || MethodName == TEXT("None"))
+    {
+        UFunction* RootFunction = UBlueprintNativizationLibrary::GetRootFunctionDeclaration(Function);
+        MethodName = UBlueprintNativizationLibrary::GetUniqueFunctionName(RootFunction, RootFunction->GetName());
+    }
+    if (Function->HasAllFunctionFlags(FUNC_Native | FUNC_Event))
+    {
+        return MethodName + TEXT("_Implementation");
+    }
+    FFunctionDescriptor NativeMethod;
+    if (UBlueprintNativizationSettingsLibrary::FindNativeByClassAndName(Call->GetBlueprint()->GeneratedClass,
+        Function->GetName(), NativeMethod))
+    {
+        return NativeMethod.FunctionName;
+    }
+    UFunction* RootFunction = UBlueprintNativizationLibrary::GetRootFunctionDeclaration(Function);
+    if (RootFunction->GetOwnerClass()->HasAnyClassFlags(CLASS_Native) &&
+        RootFunction->HasAnyFunctionFlags(FUNC_BlueprintEvent) && !RootFunction->HasAnyFunctionFlags(FUNC_Native))
+    {
+        for (UClass* Parent = Call->GetBlueprint()->GeneratedClass->GetSuperClass(); Parent && !Parent->HasAnyClassFlags(CLASS_Native); Parent = Parent->GetSuperClass())
+        {
+            UBlueprint* ParentBlueprint = Cast<UBlueprint>(Parent->ClassGeneratedBy);
+            if (ParentBlueprint && UBlueprintNativizationLibrary::FindEntryNodeByFunctionName(ParentBlueprint, RootFunction->GetFName()))
+            {
+                return RootFunction->GetName() + TEXT("_Implementation");
+            }
+        }
+        return FString();
+    }
+    if (Function->GetOwnerClass()->ClassGeneratedBy && !Function->HasAnyFunctionFlags(FUNC_Private | FUNC_Net | FUNC_Static))
+    {
+        MethodName += TEXT("_Implementation");
+    }
+    return MethodName;
+}
 
-				if (Pin && Pin->Direction == EGPD_Input)
-				{
-					FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallParentFunction, Pin, 0, MacroStack);
-					NewPreparations.Append(InputResultStruct.Preparations);
-
-					if (!InputResultStruct.Code.IsEmpty())
-					{
-						Args += InputResultStruct.Code + ", ";
-					}
-				}
-				else if (Pin)
-				{
-					Args += UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes) + ", ";
-				}
-			}
-
-
-			Args = UBlueprintNativizationLibrary::TrimAfterLastComma(Args);
-
-			FString Content;
-			Content += GenerateNewPreparations(Preparations, NewPreparations);
-			Preparations.Append(NewPreparations);
-
-			Content += FString::Format(TEXT("Super::{0}({1});"), { UBlueprintNativizationLibrary::GetUniqueFunctionName(CallParentFunction->GetTargetFunction(), ""), Args});
-			return Content;
-		}
-
-	}
-	return FString();
+FString UCallParentTranslatorObject::GenerateInstanceFunctionCall(UK2Node_CallFunction* Call,
+    const FString& Target, const FString& Arguments) const
+{
+    const FString ParentMethod = GetParentMethodName(CastChecked<UK2Node_CallParentFunction>(Call));
+    if (ParentMethod.IsEmpty())
+    {
+        if (FProperty* ReturnProperty = Call->GetTargetFunction()->GetReturnProperty())
+        {
+            return UBlueprintNativizationLibrary::GetPropertyType(ReturnProperty) + TEXT("{}");
+        }
+        return FString();
+    }
+    FString ParentArguments = Arguments;
+    FFunctionDescriptor ConstructionMethod;
+    if (FConstructionScriptTranslation::TranslateNativeEvent(Call->GetBlueprint()->GeneratedClass,
+        Call->GetTargetFunction()->GetName(), ConstructionMethod))
+    {
+        ParentArguments = TEXT("Transform");
+    }
+    return TEXT("Super::") + ParentMethod +
+        TEXT("(") + ParentArguments + TEXT(")");
 }

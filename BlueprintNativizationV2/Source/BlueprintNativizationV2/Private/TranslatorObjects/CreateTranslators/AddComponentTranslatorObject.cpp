@@ -1,206 +1,151 @@
-﻿/*
+/*
  * Publisher: AO
  * Year of Publication: 2025
  * Copyright AO All Rights Reserved.
  */
 
 #include "TranslatorObjects/CreateTranslators/AddComponentTranslatorObject.h"
+#include "RetainedBlueprintGeneration.h"
+#include "NativeApiCatalog.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
+#include "BlueprintNativizationSettings.h"
+#include "Components/SceneComponent.h"
+#include "EdGraphSchema_K2.h"
 
-FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem)
+FString UAddComponentTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName,
+    TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations,
+    UNativizationV2Subsystem* Subsystem)
 {
-	if (!Node || !NativizationV2Subsystem)
-	{
-		return FString();
-	}
-
-	FString Content;
-	TSet<FString> NewPreparations;
-
-	if (UK2Node_AddComponent* AddComponentNode = Cast<UK2Node_AddComponent>(Node))
-	{
-		UEdGraphPin* ResultPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("ReturnValue"));
-		FString BaseClassName = UBlueprintNativizationLibrary::GetUniqueFieldName(AddComponentNode->TemplateType);
-
-		FString ResultVar = "";
-		FString DeclarationVar = "";
-
-
-		if (ResultPin && ResultPin->LinkedTo.Num() > 0)
-		{
-			ResultVar = UBlueprintNativizationLibrary::GetUniquePinName(ResultPin, NativizationV2Subsystem->EntryNodes);
-		}
-		else
-		{
-			ResultVar = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByNode(TEXT("AddedComponent"), AddComponentNode, NativizationV2Subsystem->EntryNodes);
-			DeclarationVar = BaseClassName + TEXT("* ");
-		}
-
-		Content += FString::Format(TEXT("{0}{1} = NewObject<{2}>(this, {2}::StaticClass());\n"),
-			{
-				*DeclarationVar,
-				*ResultVar,
-				*BaseClassName
-			});
-
-		if (AddComponentNode->TemplateType->IsChildOf(USceneComponent::StaticClass()))
-		{
-			UEdGraphPin* ManualAttachmentPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("bManualAttachment"));
-			UEdGraphPin* RelativeTransformPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("RelativeTransform"));
-
-			FGenerateResultStruct  ManualAttachmentArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, ManualAttachmentPin, 0, MacroStack);
-			FGenerateResultStruct  RelativeTransformArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, RelativeTransformPin, 0, MacroStack);
-
-			NewPreparations.Append(ManualAttachmentArgResultStruct.Preparations);
-			NewPreparations.Append(RelativeTransformArgResultStruct.Preparations);
-
-			Content += FString::Format(TEXT("if (!{0}->bManualAttachment)\n{\n\t{0}->SetupAttachment(nullptr);\n}\n"), { *ResultVar });
-			Content += FString::Format(TEXT("{0}->SetRelativeTransform({1});\n"), { *ResultVar, *RelativeTransformArgResultStruct.Code });
-		}
-
-		TArray<FProperty*> ExposeOnSpawnProperties = UBlueprintNativizationLibrary::GetExposeOnSpawnProperties(AddComponentNode->TemplateType);
-
-		TArray<FProperty*> PropertiesToSetup;
-
-		if (UActorComponent* TemplateComponent = AddComponentNode->GetTemplateFromNode())
-		{
-			UClass* ComponentClass = TemplateComponent->GetClass();
-			UActorComponent* CDO = Cast<UActorComponent>(ComponentClass->GetDefaultObject());
-			UObject* SuperCDO = ComponentClass->GetSuperClass() ? ComponentClass->GetSuperClass()->GetDefaultObject() : nullptr;
-
-			for (TFieldIterator<FProperty> PropIt(ComponentClass); PropIt; ++PropIt)
-			{
-				FProperty* Property = *PropIt;
-				if (!Property || !Property->HasAllPropertyFlags(CPF_BlueprintVisible) || Property->HasAnyPropertyFlags(CPF_Transient | CPF_DisableEditOnTemplate))
-				{
-					continue;
-				}
-
-				FString CDOValueStr, SuperValueStr;
-				Property->ExportText_InContainer(0, CDOValueStr, CDO, nullptr, CDO, PPF_None);
-
-				if (SuperCDO)
-				{
-					Property->ExportText_InContainer(0, SuperValueStr, SuperCDO, nullptr, SuperCDO, PPF_None);
-				}
-
-				if (!CDOValueStr.Equals(SuperValueStr))
-				{
-					PropertiesToSetup.Add(Property);
-				}
-			}
-		}
-
-		if (PropertiesToSetup.Num() > 0 || ExposeOnSpawnProperties.Num())
-		{
-			Content += FString::Format(TEXT("if({0}) \n{\n"), { ResultVar});
-			if (UActorComponent* TemplateComponent = AddComponentNode->GetTemplateFromNode())
-			{
-				UClass* ComponentClass = TemplateComponent->GetClass();
-				UActorComponent* CDO = Cast<UActorComponent>(ComponentClass->GetDefaultObject());
-
-				for (FProperty* Property : PropertiesToSetup)
-				{
-					if (ExposeOnSpawnProperties.Contains(Property))
-					{
-						continue;
-					}
-					FString FixedValue = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property, NativizationV2Subsystem->LeftAllAssetRefInBlueprint, Property->ContainerPtrToValuePtr<void>(CDO));
-					FString CPPName = FString::Format(TEXT("{0}->{1}"), { *ResultVar, *Property->GetName() });
-					Content += FString::Format(TEXT("\t{0} = {1};\n"), { *CPPName, *FixedValue });
-				}
-			}
-
-			for (FProperty* Property : ExposeOnSpawnProperties)
-			{
-				UEdGraphPin* FoundPin = AddComponentNode->FindPin(Property->GetName());
-				if (FoundPin)
-				{
-					FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, FoundPin, 0, MacroStack);
-					NewPreparations.Append(GenerateResultStruct.Preparations);
-
-					Content += FString::Format(TEXT("{0}->{1} = {2};\n"), {
-						ResultVar,
-						UBlueprintNativizationLibrary::GetUniquePropertyName(Property),
-						GenerateResultStruct.Code
-					});
-				}
-			}
-
-			Content += "}\n";
-		}
-
-		Content += FString::Format(TEXT("{0}->RegisterComponent();\n"), { *ResultVar });
-
-	}
-
-	else if (UK2Node_AddComponentByClass* AddComponentByClassNode = Cast<UK2Node_AddComponentByClass>(Node))
-	{
-		UEdGraphPin* ClassPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("Class"));
-		UEdGraphPin* ResultPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("ReturnValue"));
-
-		FGenerateResultStruct ClassArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ClassPin, 0, MacroStack);
-		FString ClassArg = ClassPin ? ClassArgResultStruct.Code : TEXT("nullptr");
-		FString ResultVar = "";
-		FString DeclarationVar = "";
-
-		if (ResultPin && ResultPin->LinkedTo.Num() > 0)
-		{
-			ResultVar = UBlueprintNativizationLibrary::GetUniquePinName(ResultPin, NativizationV2Subsystem->EntryNodes);
-		}
-		else
-		{
-			ResultVar = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByNode(TEXT("AddedComponent"), AddComponentByClassNode, NativizationV2Subsystem->EntryNodes);
-			DeclarationVar = TEXT("UActorComponent* ");
-		}
-
-		Content += FString::Format(TEXT("{0}{1} = NewObject<{2}>(this, {2}::StaticClass());\n"),
-		{
-			*DeclarationVar,
-			*ResultVar,
-			*ClassArg
-		});
-
-		if (AddComponentByClassNode->GetClassToSpawn()->IsChildOf(USceneComponent::StaticClass()))
-		{
-			UEdGraphPin* ManualAttachmentPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("bManualAttachment"));
-			UEdGraphPin* RelativeTransformPin = UBlueprintNativizationLibrary::GetPinByName(Node->Pins, TEXT("RelativeTransform"));
-
-			FGenerateResultStruct  ManualAttachmentArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, ManualAttachmentPin, 0, MacroStack);
-			FGenerateResultStruct  RelativeTransformArgResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, RelativeTransformPin, 0, MacroStack);
-			NewPreparations.Append(ManualAttachmentArgResultStruct.Preparations);
-			NewPreparations.Append(RelativeTransformArgResultStruct.Preparations);
-
-			Content += FString::Format(TEXT("if (!{0}->bManualAttachment)\n{\n\t{0}->SetupAttachment(nullptr);\n}\n"), { *ResultVar });
-			Content += FString::Format(TEXT("{0}->SetRelativeTransform({1});\n"), { *ResultVar, *RelativeTransformArgResultStruct.Code });
-		}
-
-		TArray<FProperty*> ExposeOnSpawnProperties = UBlueprintNativizationLibrary::GetExposeOnSpawnProperties(AddComponentByClassNode->GetClassToSpawn());
-		if (ExposeOnSpawnProperties.Num() > 0)
-		{
-			Content += FString::Format(TEXT("if({0})\n{\n"), { ResultVar });
-			for (FProperty* Property : ExposeOnSpawnProperties)
-			{
-				UEdGraphPin* FoundPin = AddComponentByClassNode->FindPin(Property->GetName());
-				if (FoundPin)
-				{
-					FGenerateResultStruct GenerateResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(AddComponentNode, FoundPin, 0, MacroStack);
-					NewPreparations.Append(GenerateResultStruct.Preparations);
-
-					Content += FString::Format(TEXT("{0}->{1} = {2};\n"), {
-						ResultVar,
-						UBlueprintNativizationLibrary::GetUniquePropertyName(Property),
-						GenerateResultStruct.Code
-						});
-				}
-			}
-			Content += "}\n";
-		}
-		Content += FString::Format(TEXT("{0}->RegisterComponent();\n"), { *ResultVar });
-	}
-
-	FString Preparation = GenerateNewPreparations(Preparations, NewPreparations);
-	Preparations.Append(NewPreparations);
-	return Preparation + Content;
+    UK2Node_AddComponent* Component = CastChecked<UK2Node_AddComponent>(Node);
+    UActorComponent* Template = Component->GetTemplateFromNode();
+    UClass* ComponentClass = Template->GetClass();
+    const FString ClassName = FRetainedBlueprintGeneration::GetClassName(ComponentClass);
+    const FString TemplateMember = FRetainedBlueprintGeneration::RegisterComponentTemplate(Template);
+    const FString TemplateValue = TemplateMember + TEXT("Value");
+    UEdGraphPin* Output = Component->GetReturnValuePin();
+    FString ResultName = UBlueprintNativizationLibrary::GetUniquePinName(Output, Subsystem->EntryNodes);
+    FString Content;
+    if (!UBlueprintNativizationLibrary::CheckAnySubPinLinked(Output))
+    {
+        ResultName = Subsystem->GetNodeStateName(Node, TEXT("AddedComponent"));
+        Content += ClassName + TEXT("* ") + ResultName + TEXT(" = nullptr;\n");
+    }
+    const FGenerateResultStruct Owner = Subsystem->GenerateInputParameterCodeForNode(Node,
+        Component->FindPinChecked(UEdGraphSchema_K2::PN_Self), 0, MacroStack);
+    const FGenerateResultStruct ManualAttachment = Subsystem->GenerateInputParameterCodeForNode(Node,
+        Component->FindPinChecked(TEXT("bManualAttachment")), 0, MacroStack);
+    FGenerateResultStruct Transform;
+    USceneComponent* SceneTemplate = Cast<USceneComponent>(Template);
+    if (Component->FindPinChecked(TEXT("RelativeTransform"))->LinkedTo.IsEmpty() && SceneTemplate)
+    {
+        const FTransform TemplateTransform = SceneTemplate->GetRelativeTransform();
+        FString DefaultTransform;
+        TBaseStructure<FTransform>::Get()->ExportText(DefaultTransform, &TemplateTransform, nullptr, nullptr, PPF_None, nullptr);
+        Transform.Code = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(TEXT("RelativeTransform"),
+            Component->FindPinChecked(TEXT("RelativeTransform"))->PinType, DefaultTransform, nullptr, Subsystem->LeftAllAssetRefInBlueprint);
+    }
+    else
+    {
+        Transform = Subsystem->GenerateInputParameterCodeForNode(Node, Component->FindPinChecked(TEXT("RelativeTransform")), 0, MacroStack);
+    }
+    const FGenerateResultStruct Deferred = Subsystem->GenerateInputParameterCodeForNode(Node,
+        Component->FindPinChecked(TEXT("bDeferredFinish")), 0, MacroStack);
+    FGenerationPreparations InputPreparations = Owner.Preparations;
+    InputPreparations.Append(ManualAttachment.Preparations);
+    InputPreparations.Append(Transform.Preparations);
+    InputPreparations.Append(Deferred.Preparations);
+    Content += GenerateNewPreparations(Preparations, InputPreparations);
+    Preparations.Append(InputPreparations);
+    FString OwnerCode = Owner.Code;
+    if (OwnerCode.IsEmpty())
+    {
+        OwnerCode = TEXT("this");
+    }
+    FString OwnerName = OwnerCode;
+    const bool bCheckOwner = OwnerCode != TEXT("this");
+    if (bCheckOwner)
+    {
+        OwnerName = Subsystem->GetNodeStateName(Node, TEXT("ComponentOwner"));
+        Content += TEXT("const auto ") + OwnerName + TEXT(" = ") + OwnerCode + TEXT(";\n");
+        Content += TEXT("if (IsValid(") + OwnerName + TEXT("))\n{\n");
+    }
+    Content += ResultName + TEXT(" = Cast<") + ClassName + TEXT(">(") + OwnerName + TEXT("->CreateComponentFromTemplate(") +
+        TEXT("Cast<UActorComponent>(") + TemplateMember + TEXT(".Get())));\n");
+    if (!Subsystem->LeftAllAssetRefInBlueprint)
+    {
+        FString TemplateAssignments;
+        UObject* ClassDefault = ComponentClass->GetDefaultObject();
+        for (TFieldIterator<FProperty> PropertyIterator(ComponentClass); PropertyIterator; ++PropertyIterator)
+        {
+            FProperty* Property = *PropertyIterator;
+            if (!Property->HasAnyPropertyFlags(CPF_Edit) || Property->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated) ||
+                Property->Identical_InContainer(Template, ClassDefault))
+            {
+                continue;
+            }
+            if (SceneTemplate && Property->GetOwnerClass() == USceneComponent::StaticClass() &&
+                (Property->GetFName() == TEXT("RelativeLocation") || Property->GetFName() == TEXT("RelativeRotation") ||
+                    Property->GetFName() == TEXT("RelativeScale3D")))
+            {
+                continue;
+            }
+            void* ValueAddress = Property->ContainerPtrToValuePtr<void>(Template);
+            if (FRetainedBlueprintGeneration::IsRetained(Property->GetOwnerClass()))
+            {
+                if (!UBlueprintNativizationLibrary::IsAvailibleOneLineDefaultConstructorForProperty(Property))
+                {
+                    FNativeApiCatalog::AddError(TEXT("Complex retained Blueprint component defaults require explicit initialization: ") + Property->GetPathName());
+                    continue;
+                }
+                const FString Value = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property,
+                    Subsystem->LeftAllAssetRefInBlueprint, ValueAddress);
+                TemplateAssignments += FRetainedBlueprintGeneration::WriteProperty(Property, TemplateValue, Value);
+                continue;
+            }
+            if (!UBlueprintNativizationLibrary::IsAvailibleOneLineDefaultConstructorForProperty(Property))
+            {
+                FString PropertyName;
+                TemplateAssignments += UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForProperty(Property,
+                    ValueAddress, Property->ContainerPtrToValuePtr<void>(ClassDefault), Subsystem->EntryNodes,
+                    Node->GetBlueprint()->GeneratedClass, false, Subsystem->LeftAllAssetRefInBlueprint,
+                    TemplateValue + TEXT("->"), PropertyName, TemplateValue);
+                continue;
+            }
+            const FString Value = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property,
+                Subsystem->LeftAllAssetRefInBlueprint, ValueAddress);
+            FGetterAndSetterPropertyDescriptor Descriptor;
+            if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(Property, Descriptor) &&
+                !Descriptor.SetterPropertyFunctionName.IsEmpty())
+            {
+                TemplateAssignments += TemplateValue + TEXT("->") + Descriptor.SetterPropertyFunctionName + TEXT("(") + Value + TEXT(");\n");
+            }
+            else
+            {
+                TemplateAssignments += TemplateValue + TEXT("->") + UBlueprintNativizationLibrary::GetUniquePropertyName(Property) +
+                    TEXT(" = ") + Value + TEXT(";\n");
+            }
+        }
+        const FString TemplateInitialization = TEXT("{\nUClass* ComponentClass = ") +
+            FRetainedBlueprintGeneration::GetClassValue(ComponentClass) + TEXT(";\nif (ComponentClass)\n{\nauto* ") +
+            TemplateValue + TEXT(" = NewObject<") + ClassName + TEXT(">(UObject::GetClass(), ComponentClass, FName(") +
+            FRetainedBlueprintGeneration::Quote(Template->GetName()) + TEXT("), RF_ArchetypeObject | RF_Public);\n") + TemplateAssignments +
+            TemplateMember + TEXT(" = ") + TemplateValue + TEXT(";\n}\n}\n");
+        FRetainedBlueprintGeneration::SetComponentTemplateInitialization(Template, TemplateInitialization);
+        }
+    const FString Finish = OwnerName + TEXT("->FinishAddComponent(") + ResultName + TEXT(", ") +
+        ManualAttachment.Code + TEXT(", ") + Transform.Code + TEXT(");\n");
+    if (Deferred.Code == TEXT("false"))
+    {
+        Content += Finish;
+    }
+    else if (Deferred.Code != TEXT("true"))
+    {
+        Content += TEXT("if (!(") + Deferred.Code + TEXT("))\n{\n") + Finish + TEXT("}\n");
+    }
+    if (bCheckOwner)
+    {
+        Content += TEXT("}\n");
+    }
+    return Content;
 }

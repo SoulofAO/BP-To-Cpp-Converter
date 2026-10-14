@@ -28,7 +28,14 @@ public:
         NodeNamesForCheck = { "WhileLoop" };
     }
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual bool CanApply(UK2Node* Node) override;
+
+    virtual bool ShouldPrepareInputs(UK2Node* Node, const FString& EntryPinName) const override
+    {
+        return false;
+    }
+
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
 
     virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName) override

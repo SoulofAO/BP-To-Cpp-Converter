@@ -25,7 +25,9 @@ class BLUEPRINTNATIVIZATIONV2_API USwitchTranslatorObject : public UTranslatorBP
         NodeNamesForCheck = {};
     }
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+
+    virtual TSet<FString> GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override;
 
     virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName)
     {

@@ -11,8 +11,11 @@
 #include "K2Node_Composite.h"
 #include "BlueprintNativizationData.h"
 #include "TranslatorObjects/BaseTranslatorObject.h"
-#include "IHotReload.h"
+#include "Misc/CompilationResult.h"
+#include "RepeatedCallGeneration.h"
 #include "BlueprintNativizationSubsystem.generated.h"
+
+class FJsonObject;
 
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FModuleCompilerFinishedEvent, const FString&, ECompilationResult::Type, bool);
 
@@ -35,7 +38,7 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FModuleCompilerFinishedEvent, const FStri
 */
 
 UCLASS()
-class UNativizationV2Subsystem : public UEngineSubsystem
+class BLUEPRINTNATIVIZATIONV2_API UNativizationV2Subsystem : public UEngineSubsystem
 {
     GENERATED_BODY()
 
@@ -47,7 +50,7 @@ public:
         bool InputTransformOnlyOneFileCode = true, 
         bool HotReloadAndReplace = false,
         bool MergeWithExistModule = false, 
-        bool SaveCache = false, bool NewLeftAllAssetRefInBlueprint = false, FString SaveCachePath = "");
+        bool SaveCache = false, bool NewLeftAllAssetRefInBlueprint = true, FString SaveCachePath = "", bool bContinueOnError = false);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     FNativizationCode RunNativizationForOneFunctionBlueprint(UBlueprint* InputTarget, bool NewLeftAllAssetRefInBlueprint, FString FunctionName = "");
@@ -72,14 +75,18 @@ public:
 
     UPROPERTY(BlueprintReadOnly, Category = "Nativization")
     bool bIsNativizing = false;
+    TFunction<bool(int32, int32, const FString&)> OperationProgress;
 
     UPROPERTY(BlueprintReadOnly, Category = "Nativization")
-    bool LeftAllAssetRefInBlueprint = false;
+    bool LeftAllAssetRefInBlueprint = true;
 
     UPROPERTY(BlueprintReadOnly, Category = "Nativization")
     TArray<UTranslatorBPToCppObject*> TranslatorObjects;
 
     TArray<FGenerateFunctionStruct> EntryNodes;
+
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<UK2Node>> TimelineInitializationNodes;
 
     void LoadTranslatorObjects();
 
@@ -87,13 +94,20 @@ public:
 
     void EnsureDirectory(const FString& Directory);
 
-    void SaveNativizationResult(FNativizationModuleResult NativizationModuleResult, FString Directory, FString& OutputDirectory, bool MergeWithExistModule);
+    bool SaveNativizationResult(FNativizationModuleResult NativizationModuleResult, FString Directory, FString& OutputDirectory, bool MergeWithExistModule);
 
     FNativizationCode GenerateUnrealModule(const FString& ModuleName, TArray<UObject*> Targets);
 
     FString GenerateUnrealBuildCsModule(const FString& ModuleName, TArray<UObject*> Targets);
 
     void CreateJSONCache(FString CacheDirectory);
+    bool TryPrepareNewModule(FString& Error);
+    bool CaptureConfigurationTemplates(const TMap<UField*, FName>& TranslatedObjects, const TMap<FString, FString>& MemberNames, bool bKeepAssetReferencesInBlueprint, TSharedPtr<FJsonObject>& Result, FString& Error) const;
+    bool WriteJSONCache(FString CacheDirectory, const TMap<UField*, FName>& TranslatedObjects, const TMap<FString, FString>& MemberNames = {}, const TMap<FString, FString>& DefaultOnlyClassReplacements = {}, bool bKeepAssetReferencesInBlueprint = true);
+    TMap<FString, FString> CaptureMigrationMemberNames() const;
+    TMap<FString, FString> CaptureMigrationClassReplacements() const;
+    bool ApplyMigrationTypes(const TMap<UField*, UField*>& TypeMappings, const TMap<FString, FString>& MemberNames, FString& Error, bool bPreviewOnly = false, const TMap<UClass*, UClass*>& DefaultOnlyClassReplacements = {}, bool bContinueOnError = false, bool bKeepAssetReferencesInBlueprint = true, const TSharedPtr<FJsonObject>& ConfigurationTemplates = nullptr);
+    bool TryReapplyJSONCache(FString CacheFilePath, FString& Error, bool bPreviewOnly = false, FString* Summary = nullptr, bool bContinueOnError = false);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     void ReapplyJSONCache(FString CacheFilePath);
@@ -124,6 +138,7 @@ public:
     FString GenerateFunctionDeclarationsCode(TSubclassOf<UObject> GeneratedClass, bool VirtualDeclarationToZeroImplementation = false);
 
     FString GetFunctionFlagsString(UFunction* Function);
+    static bool ShouldGenerateBlueprintNativeEvent(const UFunction* Function);
 
     FString GetPropertyFlagsString(FProperty* Property);
 
@@ -152,9 +167,9 @@ public:
 
     TArray<UK2Node*> GetAllContextNodes();
 
-    TSet<FString> GetInputParametersForEntryNode(UK2Node* EntryNode);
+    TSet<FString> GetInputParametersForEntryNode(UK2Node* EntryNode, bool bReflectedDeclaration = false);
 
-    FString ProcessGraphsForCodeGeneration(UK2Node* Node);
+    FString ProcessGraphsForCodeGeneration(const FGenerateFunctionStruct& Function);
 
     FString GenerateSetupPlayerInputComponentCppCode(UBlueprint* Blueprint);
 
@@ -162,8 +177,45 @@ public:
 
     TSet<FString> GetAllUsedLocalGenerateFunctionParameters(UK2Node* EntryNode, FString EntryPinName);
 
-    FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TSet<FString> Preparations, TArray<UK2Node*> MacroStack);
+    FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, FGenerationPreparations Preparations, TArray<UK2Node*> MacroStack);
 
     FString GenerateLocalVariablesCodeFromEntryNode(UK2Node* EntryNode, TArray<UK2Node*> MacroStack = TArray<UK2Node*>());
+
+    UK2Node* LocalVariableEntryNode = nullptr;
+    UK2Node* DataConsumer = nullptr;
+    FString InputEvaluationPurpose = TEXT("Input");
+    bool bRequiresInputStorage = false;
+    TSet<UK2Node*> DeferredExecutionNodes;
+    UK2Node* ValidatedCallNode = nullptr;
+    FString ValidatedCallReceiver;
+    TArray<UK2Node*> ActiveLoopNodes;
+    TMap<UEdGraphPin*, FString> PersistentEntryParameters;
+    void RegisterPersistentEntryParameters();
+    TMap<UK2Node*, FGenerateResultStruct> PureFunctionCalls;
+    TMap<UEdGraphNode*, int32> PureExecutionOrder;
+    FString GeneratePurePreparations(UK2Node* Consumer, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations);
+    TMap<UK2Node*, FString> ExpandedNodeNames;
+    FString GetNodeStateName(UK2Node* Node, const FString& Suffix, bool bLocal = false);
+    UEdGraphPin* FindCommonExecutionTail(UEdGraphPin* FirstBranch, UEdGraphPin* SecondBranch);
+    UEdGraphPin* FindCommonExecutionTail(const TArray<UEdGraphPin*>& Branches);
+    FString GenerateControlFlowFunctions(const FGenerateFunctionStruct& Function);
+    FString RegisterRepeatedCall(const FString& Signature, const FString& Name, const FString& Definition,
+        const FString& ExpandedCode, const FString& Arguments, const FString& ResultName);
+    FString ResolveRepeatedCalls(FString Content) const;
+    FString GenerateFunctionReturnStatement(const FString& Value) const;
+    FString GenerateControlFunctionCall(int32 FunctionIndex) const;
+    int32 GetLatentActionIdentifier(UK2Node* Node);
+
+private:
+    bool bCollectRepeatedCalls = false;
+    TArray<FRepeatedCallSite> RepeatedCallSites;
+    TArray<FVisitedNodeStack> ControlFunctionEntries;
+    TArray<FString> ControlFunctionNames;
+    bool bGeneratingControlFunctionEntry = false;
+    bool bInsideControlFunction = false;
+    bool bPropagateFunctionReturn = false;
+    FString FunctionReturnStateName;
+    FString FunctionResultName;
+    TMap<UK2Node*, int32> LatentActionIdentifiers;
 
 };

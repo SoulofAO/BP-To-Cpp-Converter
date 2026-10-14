@@ -15,6 +15,7 @@ class BLUEPRINTNATIVIZATIONV2_API UComponentEventTranslatorObject : public UTran
 {
 	GENERATED_BODY()
 public:
+    static FMulticastDelegateProperty* ResolveComponentDelegate(UK2Node_ComponentBoundEvent* Event, FObjectPropertyBase*& ComponentProperty, FString& Error);
 
     UComponentEventTranslatorObject()
     {

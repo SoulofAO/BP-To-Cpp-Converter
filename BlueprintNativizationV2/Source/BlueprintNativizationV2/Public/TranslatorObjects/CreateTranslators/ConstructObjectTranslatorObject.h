@@ -9,6 +9,7 @@
 #include "CoreMinimal.h"
 #include "TranslatorObjects/BaseTranslatorObject.h"
 #include "K2Node_ConstructObjectFromClass.h"
+#include "K2Node_GenericCreateObject.h"
 #include "ConstructObjectTranslatorObject.generated.h"
 
 /**
@@ -21,10 +22,13 @@ class BLUEPRINTNATIVIZATIONV2_API UConstructObjectTranslatorObject : public UTra
 	
     UConstructObjectTranslatorObject()
     {
-        ClassNodeForCheck = { UK2Node_ConstructObjectFromClass::StaticClass() };
+        ClassNodeForCheck = { UK2Node_GenericCreateObject::StaticClass() };
         NodeNamesForCheck = { };
     }
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual bool ShouldExpandNode(UK2Node* Node) const override
+    {
+        return true;
+    }
 
 };

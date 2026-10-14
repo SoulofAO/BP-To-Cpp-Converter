@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "TranslatorObjects/BaseTranslatorObject.h"
+#include "TranslatorObjects/CallFunctionTranslatorObject.h"
 #include "K2Node_CommutativeAssociativeBinaryOperator.h"
 #include "BinaryOperatorTranslatorObject.generated.h"
 
@@ -11,7 +11,7 @@
  * 
  */
 UCLASS()
-class BLUEPRINTNATIVIZATIONV2_API UBinaryOperatorTranslatorObject : public UTranslatorBPToCppObject
+class BLUEPRINTNATIVIZATIONV2_API UBinaryOperatorTranslatorObject : public UCallFunctionTranslatorObject
 {
 	GENERATED_BODY()
 	

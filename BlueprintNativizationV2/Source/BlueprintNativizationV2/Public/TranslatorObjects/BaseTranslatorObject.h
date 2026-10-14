@@ -40,7 +40,7 @@ public:
     virtual FString GenerateSetupPlayerInputComponentFunction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
     //ѕр€ма€ генераци€.
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
     //≈сли да, то продолжит последовательную генерацию дл€ всех локальных Exec пинов в Out направлении. ¬ключена по умолчанию и должнв быть включена дл€ всех нод, которые не затрагивают контроль исполнени€ и не латенны.
     virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName);
@@ -62,10 +62,20 @@ protected:
 
     virtual TSet<FString> GenerateLocalFunctionVariables(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem);
 
-    virtual FString GenerateNewPreparations(TSet<FString> OldPreparations, TSet<FString> NewPreparations);
+    virtual FString GenerateNewPreparations(FGenerationPreparations OldPreparations, FGenerationPreparations NewPreparations);
 
 public:
     virtual bool CanApply(UK2Node* Node);
+
+    virtual bool ShouldPrepareInputs(UK2Node* Node, const FString& EntryPinName) const
+    {
+        return true;
+    }
+
+    virtual bool ShouldExpandNode(UK2Node* Node) const
+    {
+        return false;
+    }
 
     virtual bool CanExposeMacro(UK2Node* InputNode)
     {

@@ -9,6 +9,7 @@
 
 #include "CoreMinimal.h"
 #include "TranslatorObjects/BaseTranslatorObject.h"
+#include "TranslatorObjects/StructTranslatorObject.h"
 #include "Engine/DeveloperSettings.h"
 
 #include "BlueprintNativizationSettings.generated.h"
@@ -208,6 +209,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Constructors")
     static bool FindConstructorDescriptorByStruct(UStruct* OwnerStruct, FConstructorDescriptor& OutNativeDesc);
 
+    static UStructTranslatorObject* FindStructTranslator(const UScriptStruct* Structure);
+    static FString TranslateStructure(const FStructTranslationRequest& Request, FGenerationPreparations* Preparations = nullptr);
+
     UFUNCTION(BlueprintCallable, Category = "Getter And Setter")
     static bool FindGetterAndSetterDescriptorDescriptorByPropertyNameAndObject(FName PropertyOriginalName, UObject* Object, FGetterAndSetterPropertyDescriptor& OutGetterAndSetterDescriptorDesc);
 
@@ -234,6 +238,14 @@ public:
 
 };
 
+UENUM(BlueprintType)
+enum class ETextGenerationMode : uint8
+{
+    PlainText UMETA(DisplayName = "Plain text (FromString)"),
+    ReadableLocalizationKeys UMETA(DisplayName = "New readable localization keys"),
+    PreserveTextData UMETA(DisplayName = "Preserve all text data and translation identity")
+};
+
 UCLASS(config = EditorPerProjectUserSettings)
 class UBlueprintNativizationV2EditorSettings : public UDeveloperSettings
 {
@@ -242,6 +254,15 @@ class UBlueprintNativizationV2EditorSettings : public UDeveloperSettings
 public:
     UBlueprintNativizationV2EditorSettings();
 
+    UPROPERTY(EditAnywhere, config, Category = "Blueprint Repair", meta = (ToolTip = "Explicit missing Blueprint library class path to native library class path. TryFix preserves calls and requires matching pins."))
+    TMap<FString, FString> BlueprintRepairLibraryReplacements;
+
+    UPROPERTY(EditAnywhere, config, Category = "Blueprint Repair", meta = (ToolTip = "Explicit retired component class path to owning actor class path. TryFix requires the current owner to have no corresponding property or component template."))
+    TMap<FString, FString> BlueprintRepairRetiredComponentOwners;
+
+    UPROPERTY(EditAnywhere, config, Category = "Blueprint Repair", meta = (ToolTip = "Clear missing textures used only by Blueprint widget image brushes and disable drawing those empty images."))
+    bool bClearMissingWidgetImages = false;
+
     virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
 
     virtual FName GetSectionName() const override { return TEXT("BlueprintNativizationV2PluginEditorSettings"); }
@@ -249,6 +270,9 @@ public:
     //The main source of translating Blueprint functions into C++ is translators. A translator serves one or more types of K2Node, and translates them into C++ code.
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<TSubclassOf<UTranslatorBPToCppObject>> TranslatorBPToCPPObjects;
+
+    UPROPERTY(EditAnywhere, config, Category = "General")
+    TArray<TSubclassOf<UStructTranslatorObject>> StructTranslators;
 
     //Some Visual Generale
     UPROPERTY(EditAnywhere, config, Category = "General|CodeEditor")
@@ -282,6 +306,28 @@ public:
     UPROPERTY(EditAnywhere, config, Category = "General")
     FString ModuleName = "BlueprintNativizationModule";
 
+    UPROPERTY(EditAnywhere, config, Category = "General", meta = (ToolTip = "Plain text discards localization data. New readable keys require new or migrated translations and flatten text histories. Preserve retains text histories, string-table references and existing translation identity."))
+    ETextGenerationMode TextGenerationMode = ETextGenerationMode::PreserveTextData;
+
+    UPROPERTY(EditAnywhere, config, Category = "General", meta = (DisplayName = "Remove Unreal Prefixes From File Names", ToolTip = "Remove U, A, F and E type prefixes from generated filenames without changing C++ type names."))
+    bool bRemoveUnrealPrefixesFromFileNames = true;
+
+    UPROPERTY(EditAnywhere, config, Category = "General", meta = (DisplayName = "Replace Default-Only Children With Parents", ToolTip = "Skip Blueprint children with no added structure or logic. Generated references use their parents and discard child class default overrides. Source assets are unchanged."))
+    bool bReplaceDefaultOnlyChildrenWithParents = true;
+
+    UPROPERTY(EditAnywhere, config, Category = "General", meta = (DisplayName = "Exclude Engine Assets From Conversion", ToolTip = "Exclude Engine assets, Engine plugin assets and Blueprint descendants of Engine Blueprints from selection, dependencies and generation. Native C++ parents remain supported."))
+    bool bExcludeEngineAssetsFromConversion = true;
+
+    UPROPERTY(EditAnywhere, config, Category = "General", meta = (DisplayName = "Continue On Error", ToolTip = "Continue generation and migration with the successful subset. Skip failed assets and assets that depend on them. Allow Export After Failed Generation separately permits diagnostic export of incomplete code."))
+    bool bContinueOnError = true;
+
+    UPROPERTY(Config, EditAnywhere, Category = "General", meta = (DisplayName = "Allow Export After Failed Generation", ToolTip = "Keep partial source after generation errors for diagnostic export. Failed results cannot create migration caches."))
+    bool bAllowExportAfterFailedGeneration = false;
+
+
+    UPROPERTY(EditAnywhere, config, Category = "General", meta = (ClampMin = "2", ToolTip = "Minimum occurrences of an independent guarded call before extracting a named local lambda."))
+    int32 RepeatedConstructionThreshold = 3;
+
     //Enable Generate Value Suffix controls whether all generated variables in C++ code will end with GeneratedValue. Better disable it, the code will be cleaner. 
     UPROPERTY(EditAnywhere, config, Category = "General")
     bool bEnableGenerateSuffix = false;
@@ -290,21 +336,9 @@ public:
     UPROPERTY(EditAnywhere, config, Category = "General")
     bool bAddBPPrefixToReparentBlueprint = true;
 
-    /*
-    Function Redirects - a list of functions that are Blueprint Implemented.These functions do not have enough metadata to say which function calls it,
-    where it can be redefined in C++.This is what this array is for.It relates the name of the Blueprint Implemented and the original C++ function.
-    */
-    UPROPERTY(EditAnywhere, Category = "General")
-    TArray<FFunctionBinding> FunctionRedirects;
 
-    /*
-    Construction Descriptors - to constructors of structures, where using a constructor for initialization is the most “correct” option. In other cases, direct setting of values via '.' is used, that is, instead of, for example, FLinearColor(0.0,0.66,1.0,1.0), FLinearColor LinearColor() will be generated;
-    LinearColor.R = 1.0; 
-    LinearColor.G = 1.0; etc. 
-    Also implemented due to the lack of reflection for this. For structures generated in Blueprints, their full constructor is implemented by default.
-    */
-    UPROPERTY(EditAnywhere, config, Category = "General")
-    TArray<FConstructorDescriptor> ConstructorDescriptors;
+
+
 
     /*
     Ignore Class to Ref Generate. 
@@ -318,15 +352,6 @@ public:
     UPROPERTY(EditAnywhere, Category = "General")
     TArray<TSoftObjectPtr<UObject>> IgnoreAssetsToRefGenerate;
 
-    //If the class cannot be activated, call the Blueprint functions directly.
-    UPROPERTY(EditAnywhere, config, Category = "General")
-    bool bReplaceCallToIgnoreAssetsToDirectBlueprintCall = false;
 
-    /*
-    Getter And Setter Description. 
-    FProperty do not contain information about the privacy - publicity of variables. This leads to the fact that access to a superior object can cause a crash due to lack of access to the variable.
-    For this, there is a list where variables are presented with a function to perform an operation, such as Get Set or completely ignore the variable.
-    */
-    UPROPERTY(EditAnywhere, config, Category = "General")
-    TArray<FGetterAndSetterPropertyDescriptor> GetterAndSetterDescriptors;
+
 };

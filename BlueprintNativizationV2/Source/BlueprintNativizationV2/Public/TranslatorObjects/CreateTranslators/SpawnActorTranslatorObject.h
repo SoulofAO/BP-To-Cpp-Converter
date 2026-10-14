@@ -26,5 +26,9 @@ public:
 		NodeNamesForCheck = { };
 	}
 	
-	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual bool ShouldExpandNode(UK2Node* Node) const override
+    {
+        return true;
+    }
+
 };

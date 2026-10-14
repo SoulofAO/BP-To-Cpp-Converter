@@ -472,6 +472,10 @@ FTextLayout::FNewLineData FColoredTextLayoutMarshaller::ProcessTokenizedLine(con
             RunInfo.Name = TEXT("SyntaxHighlight.Literal");
         }
 
+        if (bUseMutedColors && TextBlockStyle.ColorAndOpacity.IsColorSpecified())
+        {
+            TextBlockStyle.SetColorAndOpacity(TextBlockStyle.ColorAndOpacity.GetSpecifiedColor().Desaturate(0.4f));
+        }
         TSharedRef<ISlateRun> Run = FSlateTextRun::Create(RunInfo, ModelString, TextBlockStyle, ModelRange);
         Runs.Add(Run);
     }

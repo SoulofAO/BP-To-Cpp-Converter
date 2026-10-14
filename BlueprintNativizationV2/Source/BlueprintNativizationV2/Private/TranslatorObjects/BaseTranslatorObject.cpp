@@ -7,7 +7,10 @@
 #include "TranslatorObjects/BaseTranslatorObject.h"
 #include "BlueprintNativizationLibrary.h"
 #include "K2Node_MacroInstance.h"
+#include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
 #include "BlueprintNativizationSubsystem.h"
+#include "GenerationGraphContext.h"
 
 void UTranslatorBPToCppObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path, TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
@@ -15,6 +18,10 @@ void UTranslatorBPToCppObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK
 
 FString UTranslatorBPToCppObject::GenerateGlobalVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
+    if (InputNode->IsNodePure() || FGenerationGraphContext::IsFunctionGraph(InputNode))
+    {
+        return FString();
+    }
 	return GenerateLocalFunctionVariablesToHeaderVariables(InputNode, NativizationV2Subsystem);
 }
 
@@ -33,9 +40,27 @@ TSet<FString> UTranslatorBPToCppObject::GenerateHeaderIncludeInstructions(UK2Nod
 	return TSet<FString>();
 }
 
-TSet<FString> UTranslatorBPToCppObject::GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)
+TSet<FString> UTranslatorBPToCppObject::GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem)
 {
-	return TSet<FString>();
+    TSet<FString> Includes;
+    for (UEdGraphPin* Pin : Node->Pins)
+    {
+        for (UObject* TypeObject : { Pin->PinType.PinSubCategoryObject.Get(), Pin->PinType.PinValueType.TerminalSubCategoryObject.Get() })
+        {
+            UClass* PinClass = Cast<UClass>(TypeObject);
+            if (PinClass && PinClass->ClassGeneratedBy == Node->GetBlueprint())
+            {
+                continue;
+            }
+            UField* Field = Cast<UField>(TypeObject);
+            FString IncludePath;
+            if (Field && Subsystem->GetIncludeFromField(Field, IncludePath))
+            {
+                Includes.Add(IncludePath);
+            }
+        }
+    }
+    return Includes;
 }
 
 TSet<FString> UTranslatorBPToCppObject::GenerateCSPrivateDependencyModuleNames(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -56,6 +81,13 @@ bool UTranslatorBPToCppObject::CanContinueGenerateInputParameterCodeForNode(UK2N
 FString UTranslatorBPToCppObject::GenerateLocalFunctionVariablesToHeaderVariables(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	FString Content;
+    if ((Node->IsA<UK2Node_Event>() || Node->IsA<UK2Node_FunctionEntry>()) && NativizationV2Subsystem->EntryNodes.ContainsByPredicate([Node](const FGenerateFunctionStruct& Entry)
+    {
+        return Entry.Node == Node;
+    }))
+    {
+        return Content;
+    }
 	TArray<UEdGraphPin*> OutputPins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::ExecPin | EPinExcludeFilter::DelegatePin, EPinIncludeOnlyFilter::None);
 	for (UEdGraphPin* OutputPin : OutputPins)
 	{
@@ -65,7 +97,7 @@ FString UTranslatorBPToCppObject::GenerateLocalFunctionVariablesToHeaderVariable
 			FString PinType = UBlueprintNativizationLibrary::GetPinType(OutputPin->PinType, false);
 			FString VarName = UBlueprintNativizationLibrary::GetUniquePinName(OutputPin, NativizationV2Subsystem->EntryNodes);
 
-			Content += TEXT("UPROPERTY(BlueprintReadOnly)\n");
+			Content += TEXT("UPROPERTY(Transient, DuplicateTransient, BlueprintReadOnly)\n");
 			Content += FString::Format(TEXT("{0} {1};\n\n"), { *PinType, *VarName });
 		}
 	}
@@ -75,12 +107,20 @@ FString UTranslatorBPToCppObject::GenerateLocalFunctionVariablesToHeaderVariable
 TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
 	TSet<FString> Contents;
+    if ((Node->IsA<UK2Node_Event>() || Node->IsA<UK2Node_FunctionEntry>()) && NativizationV2Subsystem->EntryNodes.ContainsByPredicate([Node](const FGenerateFunctionStruct& Entry)
+    {
+        return Entry.Node == Node;
+    }))
+    {
+        return Contents;
+    }
+
 
 	TArray<UEdGraphPin*> OutputPins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::ExecPin, EPinIncludeOnlyFilter::None);
 	OutputPins = UBlueprintNativizationLibrary::GetParentPins(OutputPins);
 	for (UEdGraphPin* OutputPin : OutputPins)
 	{
-		if (UBlueprintNativizationLibrary::CheckAnySubPinLinked(OutputPin) && UBlueprintNativizationLibrary::IsPinAllLinkInCurrentFunctionNode(OutputPin, Node, NativizationV2Subsystem->EntryNodes))
+		if (!Node->IsNodePure() && UBlueprintNativizationLibrary::CheckAnySubPinLinked(OutputPin) && (FGenerationGraphContext::IsFunctionGraph(Node) || UBlueprintNativizationLibrary::IsPinAllLinkInCurrentFunctionNode(OutputPin, Node, NativizationV2Subsystem->EntryNodes)))
 		{
 			if (!CanGenerateOutPinVariable(OutputPin, NativizationV2Subsystem))
 			{
@@ -91,7 +131,7 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 			UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, Node, GenerateFunctionStruct);
 			FString VarName = UBlueprintNativizationLibrary::GetUniquePinName(OutputPin, NativizationV2Subsystem->EntryNodes);
 
-			Contents.Add(FString::Format(TEXT("{0} {1} = {2};\n"), { *UBlueprintNativizationLibrary::GetPinType(OutputPin->PinType, true), *VarName, UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(OutputPin->GetName(), OutputPin->PinType, OutputPin->DefaultValue, OutputPin->DefaultObject, NativizationV2Subsystem->LeftAllAssetRefInBlueprint) }));
+			Contents.Add(FString::Format(TEXT("{0} {1} = {2};\n"), { *UBlueprintNativizationLibrary::GetPinType(OutputPin->PinType, false), *VarName, UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(OutputPin->GetName(), OutputPin->PinType, OutputPin->DefaultValue, OutputPin->DefaultObject, NativizationV2Subsystem->LeftAllAssetRefInBlueprint) }));
 		}
 	}
 
@@ -100,6 +140,10 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 
 	for (UEdGraphPin* InputPin : InputPins)
 	{
+        if (InputPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Struct && !InputPin->PinType.IsContainer() && InputPin->DefaultValue.IsEmpty())
+        {
+            continue;
+        }
 		if (!UBlueprintNativizationLibrary::CheckAnySubPinLinked(InputPin))
 		{
 			FGenerateFunctionStruct GenerateFunctionStruct;
@@ -119,9 +163,9 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 	return Contents;
 }
 
-FString UTranslatorBPToCppObject::GenerateNewPreparations(TSet<FString> OldPreparations, TSet<FString> NewPreparations)
+FString UTranslatorBPToCppObject::GenerateNewPreparations(FGenerationPreparations OldPreparations, FGenerationPreparations NewPreparations)
 {
-	TSet<FString> DifferencePreparations = NewPreparations.Difference(OldPreparations);
+	FGenerationPreparations DifferencePreparations = NewPreparations.Difference(OldPreparations);
 	FString JoinedString = FString::Join(DifferencePreparations.Array(), TEXT("\n"));
 	if (!JoinedString.IsEmpty())
 	{
@@ -155,10 +199,6 @@ bool UTranslatorBPToCppObject::CanApply(UK2Node* Node)
 		else
 		{
 			FString Name = UBlueprintNativizationLibrary::GetFunctionNameByInstanceNode(Node);
-			if (UK2Node_MacroInstance* MacroInstance = Cast<UK2Node_MacroInstance>(Node))
-			{
-				Name = MacroInstance->GetMacroGraph()->GetName();
-			}
 
 			if (NodeNamesForCheck.Contains(Name))
 			{
@@ -168,4 +208,3 @@ bool UTranslatorBPToCppObject::CanApply(UK2Node* Node)
 	}
 	return false;
 }
-

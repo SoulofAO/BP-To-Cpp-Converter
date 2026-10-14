@@ -21,10 +21,16 @@ class BLUEPRINTNATIVIZATIONV2_API USetMemberStructTranslatorObject : public UTra
 	
 	USetMemberStructTranslatorObject()
 	{
-		ClassNodeForCheck = {UK2Node_SetFieldsInStruct::StaticClass()};
+		ClassNodeForCheck = {UK2Node_SetFieldsInStruct::StaticClass(), UK2Node_StructMemberSet::StaticClass()};
 		NodeNamesForCheck = { };
 	}
 
-	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual bool CanApply(UK2Node* Node) override;
 
+	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+
+    bool HasSharedInput(UK2Node* Node, UNativizationV2Subsystem* Subsystem);
+    virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateLocalVariables(UK2Node* Node, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override;
+    virtual FString GenerateGlobalVariables(UK2Node* Node, FString Prefix, UNativizationV2Subsystem* Subsystem) override;
 };

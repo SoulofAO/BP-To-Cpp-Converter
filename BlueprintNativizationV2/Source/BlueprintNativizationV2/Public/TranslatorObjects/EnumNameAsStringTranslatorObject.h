@@ -18,7 +18,7 @@ class BLUEPRINTNATIVIZATIONV2_API UEnumNameAsStringTranslatorObject : public UTr
 public:
 	UEnumNameAsStringTranslatorObject()
 	{
-		ClassNodeForCheck = { UK2Node_GetEnumeratorNameAsString::StaticClass() };
+		ClassNodeForCheck = { UK2Node_GetEnumeratorName::StaticClass() };
 		NodeNamesForCheck = { };
 	}
 

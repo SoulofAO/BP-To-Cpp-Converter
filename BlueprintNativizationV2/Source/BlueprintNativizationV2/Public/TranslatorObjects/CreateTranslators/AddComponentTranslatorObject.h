@@ -26,6 +26,15 @@ class BLUEPRINTNATIVIZATIONV2_API UAddComponentTranslatorObject : public UTransl
         NodeNamesForCheck = { };
     }
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual bool ShouldExpandNode(UK2Node* Node) const override
+    {
+        if (const UK2Node_AddComponent* Component = Cast<UK2Node_AddComponent>(Node))
+        {
+            return Component->bHasExposedVariable;
+        }
+        return Node->IsA<UK2Node_AddComponentByClass>();
+    }
+
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
 };

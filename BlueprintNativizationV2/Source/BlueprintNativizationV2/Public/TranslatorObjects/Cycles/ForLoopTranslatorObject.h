@@ -31,7 +31,19 @@ public:
     }
 
 
-    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, TSet<FString>& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+    virtual bool ShouldPrepareInputs(UK2Node* Node, const FString& EntryPinName) const override
+    {
+        return EntryPinName != TEXT("Break");
+    }
+
+    virtual bool CanApply(UK2Node* Node) override;
+
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;
+
+    virtual TSet<FString> GenerateLocalVariables(UK2Node* InputNode, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override;
+    virtual FString GenerateGlobalVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* Subsystem) override;
+    FString GenerateLoopState(UK2Node* Node, UNativizationV2Subsystem* Subsystem, bool bMember);
+    FString GenerateBreak(UK2Node* Node, UNativizationV2Subsystem* Subsystem);
 
     virtual bool CanGenerateOutPinVariable(UEdGraphPin* Pin, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
@@ -51,6 +63,4 @@ public:
     }
 
 
-private:
-    UK2Node * FindLastForLoopInStackNode(const TArray<FVisitedNodeStack>& VisitedNodes);
 };

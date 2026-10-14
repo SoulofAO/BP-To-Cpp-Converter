@@ -36,6 +36,7 @@ public:
     virtual FTextLayout::FNewLineData ProcessTokenizedLine(const ISyntaxTokenizer::FTokenizedLine& TokenizedLine, const int32& LineNumber, const FString& SourceString);
 
     FTextBlockStyle DefaultStyle;
+    bool bUseMutedColors = false;
 
 };
 
@@ -43,11 +44,57 @@ public:
 
 class SColorEditableText : public SMultiLineEditableText
 {
+    TSharedPtr<FColoredTextLayoutMarshaller> CodeMarshaller;
+protected:
+    virtual float UpdateAndClampVerticalScrollBar(float Offset, float ViewFraction, EVisibility Visibility) override
+    {
+        const float Result = SMultiLineEditableText::UpdateAndClampVerticalScrollBar(Offset, ViewFraction, Visibility);
+        OnVScrollBarUserScrolled.ExecuteIfBound(Offset);
+        return Result;
+    }
 public:
+    TFunction<FReply(const FGeometry&, const FPointerEvent&)> MouseWheelHandler;
+
+    virtual FReply OnMouseWheel(const FGeometry& Geometry, const FPointerEvent& MouseEvent) override
+    {
+        if (MouseWheelHandler)
+        {
+            FReply Reply = MouseWheelHandler(Geometry, MouseEvent);
+            if (Reply.IsEventHandled())
+            {
+                return Reply;
+            }
+        }
+        return SMultiLineEditableText::OnMouseWheel(Geometry, MouseEvent);
+    }
+
+    void UseMutedSyntaxColors()
+    {
+        CodeMarshaller->bUseMutedColors = true;
+        CodeMarshaller->MakeDirty();
+        Refresh();
+    }
+    void SetCodeFont(const FSlateFontInfo& Font)
+    {
+        CodeMarshaller->DefaultStyle.SetFont(Font);
+        CodeMarshaller->MakeDirty();
+        SetFont(Font);
+        Refresh();
+    }
+    void SynchronizeVerticalScroll(float Offset)
+    {
+        OnVScrollBarMoved(Offset);
+    }
+
     void Construct(const FArguments& InArgs)
     {
         // Create our custom marshaller
-        TSharedRef<FColoredTextLayoutMarshaller> Marshaller = FColoredTextLayoutMarshaller::Create(*InArgs._TextStyle);
+        FTextBlockStyle CodeStyle = *InArgs._TextStyle;
+        if (InArgs._Font.IsSet())
+        {
+            CodeStyle.SetFont(InArgs._Font.Get());
+        }
+        CodeMarshaller = FColoredTextLayoutMarshaller::Create(CodeStyle);
 
         // Call the parent constructor with our marshaller
         SMultiLineEditableText::Construct(
@@ -55,7 +102,7 @@ public:
             .Text(InArgs._Text)
             .HintText(InArgs._HintText)
             .SearchText(InArgs._SearchText)
-            .Marshaller(Marshaller)
+            .Marshaller(CodeMarshaller)
             .WrapTextAt(InArgs._WrapTextAt)
             .AutoWrapText(InArgs._AutoWrapText)
             .WrappingPolicy(InArgs._WrappingPolicy)
@@ -76,6 +123,10 @@ public:
             .ClearKeyboardFocusOnCommit(InArgs._ClearKeyboardFocusOnCommit)
             .AllowContextMenu(InArgs._AllowContextMenu)
             .OnCursorMoved(InArgs._OnCursorMoved)
+            .HScrollBar(InArgs._HScrollBar)
+            .VScrollBar(InArgs._VScrollBar)
+            .OnHScrollBarUserScrolled(InArgs._OnHScrollBarUserScrolled)
+            .OnVScrollBarUserScrolled(InArgs._OnVScrollBarUserScrolled)
             .ContextMenuExtender(InArgs._ContextMenuExtender)
             .ModiferKeyForNewLine(InArgs._ModiferKeyForNewLine)
             .VirtualKeyboardOptions(InArgs._VirtualKeyboardOptions)
