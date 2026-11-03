@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "EdGraphSchema_K2.h"
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
 #include "Engine/DeveloperSettings.h"
@@ -32,17 +33,17 @@ public:
 
     virtual TSet<FString> GenerateLocalVariables(UK2Node* InputNode, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
 
-    //Ограничивает возможность генерации переменных как локальных, или глобальных переменных. Пока идей, для чего это может пригодится, нет. 
+    //РћРіСЂР°РЅРёС‡РёРІР°РµС‚ РІРѕР·РјРѕР¶РЅРѕСЃС‚СЊ РіРµРЅРµСЂР°С†РёРё РїРµСЂРµРјРµРЅРЅС‹С… РєР°Рє Р»РѕРєР°Р»СЊРЅС‹С…, РёР»Рё РіР»РѕР±Р°Р»СЊРЅС‹С… РїРµСЂРµРјРµРЅРЅС‹С…. РџРѕРєР° РёРґРµР№, РґР»СЏ С‡РµРіРѕ СЌС‚Рѕ РјРѕР¶РµС‚ РїСЂРёРіРѕРґРёС‚СЃСЏ, РЅРµС‚.
     virtual bool CanGenerateOutPinVariable(UEdGraphPin* Pin, UNativizationV2Subsystem* NativizationV2Subsystem) { return true; };
 
     virtual FString GenerateConstruction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
     virtual FString GenerateSetupPlayerInputComponentFunction(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
-    //Прямая генерация.
+    //РџСЂСЏРјР°СЏ РіРµРЅРµСЂР°С†РёСЏ.
     virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) { return FString(); };
 
-    //Если да, то продолжит последовательную генерацию для всех локальных Exec пинов в Out направлении. Включена по умолчанию и должнв быть включена для всех нод, которые не затрагивают контроль исполнения и не латенны.
+    //Р•СЃР»Рё РґР°, С‚Рѕ РїСЂРѕРґРѕР»Р¶РёС‚ РїРѕСЃР»РµРґРѕРІР°С‚РµР»СЊРЅСѓСЋ РіРµРЅРµСЂР°С†РёСЋ РґР»СЏ РІСЃРµС… Р»РѕРєР°Р»СЊРЅС‹С… Exec РїРёРЅРѕРІ РІ Out РЅР°РїСЂР°РІР»РµРЅРёРё. Р’РєР»СЋС‡РµРЅР° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ Рё РґРѕР»Р¶РЅРІ Р±С‹С‚СЊ РІРєР»СЋС‡РµРЅР° РґР»СЏ РІСЃРµС… РЅРѕРґ, РєРѕС‚РѕСЂС‹Рµ РЅРµ Р·Р°С‚СЂР°РіРёРІР°СЋС‚ РєРѕРЅС‚СЂРѕР»СЊ РёСЃРїРѕР»РЅРµРЅРёСЏ Рё РЅРµ Р»Р°С‚РµРЅРЅС‹.
     virtual bool CanContinueCodeGeneration(UK2Node* InputNode, FString EntryPinName);
 
     virtual TSet<FString> GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem);
@@ -51,10 +52,10 @@ public:
 
     virtual TSet<FString> GenerateCSPrivateDependencyModuleNames(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem);
 
-    //Обратная генерация.
+    //РћР±СЂР°С‚РЅР°СЏ РіРµРЅРµСЂР°С†РёСЏ.
     virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
 
-    //Запрещает дальнейшие попытки обработку системами PinSplit. Полезно только в случае, когда пин уже распаршен и имеет нестандартный механизм сплитинга (как, например, в Enhance).
+    //Р—Р°РїСЂРµС‰Р°РµС‚ РґР°Р»СЊРЅРµР№С€РёРµ РїРѕРїС‹С‚РєРё РѕР±СЂР°Р±РѕС‚РєСѓ СЃРёСЃС‚РµРјР°РјРё PinSplit. РџРѕР»РµР·РЅРѕ С‚РѕР»СЊРєРѕ РІ СЃР»СѓС‡Р°Рµ, РєРѕРіРґР° РїРёРЅ СѓР¶Рµ СЂР°СЃРїР°СЂС€РµРЅ Рё РёРјРµРµС‚ РЅРµСЃС‚Р°РЅРґР°СЂС‚РЅС‹Р№ РјРµС…Р°РЅРёР·Рј СЃРїР»РёС‚РёРЅРіР° (РєР°Рє, РЅР°РїСЂРёРјРµСЂ, РІ Enhance).
     virtual bool CanContinueGenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem);
 
 protected:
@@ -72,10 +73,6 @@ public:
         return true;
     }
 
-    virtual bool ShouldExpandNode(UK2Node* Node) const
-    {
-        return false;
-    }
 
     virtual bool CanExposeMacro(UK2Node* InputNode)
     {

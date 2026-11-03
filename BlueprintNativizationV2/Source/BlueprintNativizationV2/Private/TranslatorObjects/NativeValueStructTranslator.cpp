@@ -1,3 +1,4 @@
+#include "Misc/FeedbackContext.h"
 #include "TranslatorObjects/NativeValueStructTranslator.h"
 #include "InputCoreTypes.h"
 #include "GameplayTagContainer.h"
@@ -7,13 +8,16 @@
 #include "Engine/TimerHandle.h"
 #include "AI/Navigation/NavigationTypes.h"
 #include "BehaviorTree/BehaviorTreeTypes.h"
+#include "Math/RandomStream.h"
+#include "UObject/SoftObjectPath.h"
 
 bool UNativeValueStructTranslator::CanTranslate(const UScriptStruct *Structure) const
 {
     return Structure == TBaseStructure<FKey>::Get() || Structure == TBaseStructure<FTransform>::Get() ||
         Structure == FGameplayTag::StaticStruct() || Structure == FGameplayTagContainer::StaticStruct() ||
         Structure == FTimerHandle::StaticStruct() || Structure == FNavMovementProperties::StaticStruct() ||
-        Structure == FBlackboardKeySelector::StaticStruct();
+        Structure == FBlackboardKeySelector::StaticStruct() || Structure == TBaseStructure<FRandomStream>::Get() ||
+        Structure == FSoftObjectPath::StaticStruct() || Structure == FSoftClassPath::StaticStruct();
 }
 
 bool UNativeValueStructTranslator::CanInitializeValueBeforeEngineStartup(const FStructTranslationRequest& Request) const
@@ -27,9 +31,18 @@ bool UNativeValueStructTranslator::CanInitializeValueBeforeEngineStartup(const F
     {
         return true;
     }
+    if (Request.Structure == FSoftObjectPath::StaticStruct() || Request.Structure == FSoftClassPath::StaticStruct())
+    {
+        return true;
+    }
     if (Request.Structure == FGameplayTag::StaticStruct())
     {
         return true;
+    }
+    if (Request.Structure == TBaseStructure<FRandomStream>::Get())
+    {
+        const FRandomStream& Value = *static_cast<const FRandomStream*>(Request.PropertyValue);
+        return Value.GetInitialSeed() == Value.GetCurrentSeed();
     }
     if (Request.Structure == FGameplayTagContainer::StaticStruct())
     {
@@ -48,7 +61,7 @@ bool UNativeValueStructTranslator::CanInitializeValueBeforeEngineStartup(const F
         for (TFieldIterator<FProperty> Member(Request.Structure); Member; ++Member)
         {
             if (!FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(*Member,
-                Member->ContainerPtrToValuePtr<void>(Request.PropertyValue), Request.bKeepAssetReferencesInBlueprint))
+                Member->ContainerPtrToValuePtr<void>(Request.PropertyValue)))
             {
                 return false;
             }
@@ -61,6 +74,63 @@ bool UNativeValueStructTranslator::CanInitializeValueBeforeEngineStartup(const F
 bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Request,
                                              FStructTranslationResult &Result) const
 {
+    if (Request.Structure == FSoftObjectPath::StaticStruct() || Request.Structure == FSoftClassPath::StaticStruct())
+    {
+        FString NativeType = TEXT("FSoftObjectPath");
+        if (Request.Structure == FSoftClassPath::StaticStruct())
+        {
+            NativeType = TEXT("FSoftClassPath");
+        }
+        if (FStructInitialization::Describe(Request, Result, NativeType, TEXT("UObject/SoftObjectPath.h"), TEXT("CoreUObject")))
+        {
+            return true;
+        }
+        if (!FStructInitialization::IsValueOperation(Request.Operation))
+        {
+            return false;
+        }
+        FStructOnScope Storage(Request.Structure);
+        const void* Source = FStructInitialization::ReadValue(Request, Storage, Result.Error);
+        if (!Source)
+        {
+            return false;
+        }
+        FString Path;
+        if (Request.Structure == FSoftClassPath::StaticStruct())
+        {
+            Path = static_cast<const FSoftClassPath*>(Source)->ToString();
+        }
+        else
+        {
+            Path = static_cast<const FSoftObjectPath*>(Source)->ToString();
+        }
+        Result.Expression = NativeType + TEXT("(") + FStructInitialization::Quote(Path) + TEXT(")");
+        return true;
+    }
+    if (Request.Structure == TBaseStructure<FRandomStream>::Get())
+    {
+        if (FStructInitialization::Describe(Request, Result, TEXT("FRandomStream"), TEXT("Math/RandomStream.h"), TEXT("Core")))
+        {
+            return true;
+        }
+        if (!FStructInitialization::IsValueOperation(Request.Operation))
+        {
+            return false;
+        }
+        FStructOnScope Storage(Request.Structure);
+        const void* Source = FStructInitialization::ReadValue(Request, Storage, Result.Error);
+        if (!Source)
+        {
+            return false;
+        }
+        const FRandomStream& Value = *static_cast<const FRandomStream*>(Source);
+        if (Value.GetInitialSeed() != Value.GetCurrentSeed())
+        {
+            return FStructInitialization::Fallback(Request, Result);
+        }
+        Result.Expression = TEXT("FRandomStream(") + FString::FromInt(Value.GetInitialSeed()) + TEXT(")");
+        return true;
+    }
     if (Request.Structure == FTimerHandle::StaticStruct() || Request.Structure == FNavMovementProperties::StaticStruct() ||
         Request.Structure == FBlackboardKeySelector::StaticStruct())
     {
@@ -138,7 +208,7 @@ bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Re
                 if (AllowedValue && !AllowedValue->IsAsset())
                 {
                     AllowedExpressions.Add(FRetainedBlueprintGeneration::ConstructInstancedObject(AllowedTypeProperty,
-                        AllowedValue, Request.OwnerExpression, Request.bKeepAssetReferencesInBlueprint));
+                        AllowedValue, Request.OwnerExpression));
                 }
                 else
                 {
@@ -151,11 +221,15 @@ bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Re
                 Result.Preparations.Add(Name + TEXT(".") + Property->GetName() + TEXT(" = ") +
                     FStructInitialization::PropertyExpression(Property, Property->ContainerPtrToValuePtr<void>(Source), Request) + TEXT(";"));
             }
-            Result.Preparations.Add(TEXT("const FIntProperty* ") + IdentifierPropertyName +
-                TEXT(" = FindFProperty<FIntProperty>(FBlackboardKeySelector::StaticStruct(), TEXT(\"SelectedKeyID\"));"));
-            Result.Preparations.Add(TEXT("check(") + IdentifierPropertyName + TEXT(" && ") + IdentifierPropertyName + TEXT("->ArrayDim == 1);"));
-            Result.Preparations.Add(IdentifierPropertyName + TEXT("->SetPropertyValue_InContainer(&") + Name + TEXT(", ") +
-                FString::FromInt(SelectedKeyIdentifier->GetPropertyValue_InContainer(Source)) + TEXT(");"));
+            const FBlackboardKeySelector DefaultSelector{};
+            if (!SelectedKeyIdentifier->Identical_InContainer(Source, &DefaultSelector))
+            {
+                Result.Preparations.Add(TEXT("const FIntProperty* ") + IdentifierPropertyName +
+                    TEXT(" = FindFProperty<FIntProperty>(FBlackboardKeySelector::StaticStruct(), TEXT(\"SelectedKeyID\"));"));
+                Result.Preparations.Add(TEXT("check(") + IdentifierPropertyName + TEXT(" && ") + IdentifierPropertyName + TEXT("->ArrayDim == 1);"));
+                Result.Preparations.Add(IdentifierPropertyName + TEXT("->SetPropertyValue_InContainer(&") + Name + TEXT(", ") +
+                    FString::FromInt(SelectedKeyIdentifier->GetPropertyValue_InContainer(Source)) + TEXT(");"));
+            }
             Result.Preparations.Add(Name + TEXT(".AllowNoneAsValue(") +
                 FStructInitialization::PropertyExpression(NoneIsAllowed, NoneIsAllowed->ContainerPtrToValuePtr<void>(Source), Request) + TEXT(");"));
             Result.Expression = Name;
@@ -352,7 +426,15 @@ bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Re
     else if (Request.Operation == EStructTranslationOperation::ReadMember ||
              Request.Operation == EStructTranslationOperation::WriteMember)
     {
-        const FString Member = Request.MemberName.ToString();
+        FString Member = Request.MemberName.ToString();
+        if (!bKey && Member == TEXT("Location"))
+        {
+            Member = TEXT("Translation");
+        }
+        if (!bKey && Member == TEXT("Scale"))
+        {
+            Member = TEXT("Scale3D");
+        }
         FString Getter;
         FString Setter;
         if (bKey && Member == TEXT("KeyName"))
@@ -367,6 +449,10 @@ bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Re
         if (!Getter.IsEmpty() && Request.Operation == EStructTranslationOperation::ReadMember)
         {
             Result.Expression = Request.SourceExpression + TEXT(".") + Getter + TEXT("()");
+            if (!bKey && Member == TEXT("Rotation") && Request.DestinationType == TEXT("FRotator"))
+            {
+                Result.Expression += TEXT(".Rotator()");
+            }
             return true;
         }
         if (Request.Arguments.Num() == 1)
@@ -379,8 +465,13 @@ bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Re
             }
             if (!Setter.IsEmpty())
             {
+                FString Value = Request.Arguments[0].Expression;
+                if (!bKey && Member == TEXT("Rotation") && Request.Arguments[0].NativeType == TEXT("FRotator"))
+                {
+                    Value = TEXT("(") + Value + TEXT(").Quaternion()");
+                }
                 Result.Expression = Request.SourceExpression + TEXT(".") + Setter + TEXT("(") +
-                                    Request.Arguments[0].Expression + TEXT(")");
+                                    Value + TEXT(")");
                 return true;
             }
         }
@@ -398,7 +489,12 @@ bool UNativeValueStructTranslator::Translate(const FStructTranslationRequest &Re
             for (const FName Member : {FName(TEXT("Rotation")), FName(TEXT("Translation")), FName(TEXT("Scale3D"))})
             {
                 const auto *Argument = Request.Arguments.FindByPredicate(
-                    [&](const FStructTranslationArgument &Candidate) { return Candidate.Name == Member; });
+                    [&](const FStructTranslationArgument &Candidate)
+                    {
+                        return Candidate.Name == Member ||
+                            (Member == TEXT("Translation") && Candidate.Name == TEXT("Location")) ||
+                            (Member == TEXT("Scale3D") && Candidate.Name == TEXT("Scale"));
+                    });
                 if (!Argument)
                 {
                     Result.Error = TEXT("Transform construction requires Rotation, Translation and Scale3D.");

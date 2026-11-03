@@ -28,6 +28,7 @@ class UBlueprintNativizationLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 public:
+    static bool IsExternalEnum(const UEnum* Enumeration);
     static bool RequiresPostCDOInitialization(FProperty* Property, const void* PropertyAddress, bool bIncludeNativeDependencies = true);
     static FProperty* FindFunctionProperty(UFunction* Function, FName PropertyName, bool bParameter);
     static FProperty* ResolveVariableProperty(UK2Node_Variable* Variable);
@@ -161,12 +162,12 @@ public:
 
     static FString GenerateTextLiteral(const FText& Value, const FString& TextNamespace = FString(), const FString& TextName = FString());
 
-    static FString GenerateOneLineDefaultConstructorForProperty(FProperty* Property, bool LeftAllAssetRefInBlueprint, void* PropertyAddress, const FString& ObjectOuter = TEXT("this"));
+    static FString GenerateOneLineDefaultConstructorForProperty(FProperty* Property, void* PropertyAddress, const FString& ObjectOuter = TEXT("this"));
 
     static UEdGraph* GetConstructionGraph(UBlueprint* Blueprint);
 
     //GENERATE CONSTRUCTOR ONLY FOR UCLASS CONSTRUCTOR OR PIN CONSTRUCTOR
-    static FString GenerateManyLinesDefaultConstructorForProperty(FProperty* Property, void* PropertyAddress, void* SuperPropertyAddress, TArray<FGenerateFunctionStruct> EntryNodes, UClass* Class, bool FullInitialize, bool LeftAllAssetRefInBlueprint, FString PrefixComponentName, FString& NewPropertyName, const FString& ObjectOuter = TEXT("this"));
+    static FString GenerateManyLinesDefaultConstructorForProperty(FProperty* Property, void* PropertyAddress, void* SuperPropertyAddress, TArray<FGenerateFunctionStruct> EntryNodes, UClass* Class, bool FullInitialize, FString PrefixComponentName, FString& NewPropertyName, const FString& ObjectOuter = TEXT("this"));
 
     static FString ProcessFloatStrings(const FString& Input);
 
@@ -176,9 +177,9 @@ public:
 
     static bool IsAvailibleOneLineDefaultConstructor(FEdGraphPinType Type);
 
-    static FString GenerateManyLinesDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UClass* Class, bool IsConstructorFunction, UK2Node* EntryNode, TArray<FGenerateFunctionStruct> EntryNodes, bool FullInitialize, bool LeftAllAssetRefInBlueprint, FString& OutVariableName);
+    static FString GenerateManyLinesDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UClass* Class, bool IsConstructorFunction, UK2Node* EntryNode, TArray<FGenerateFunctionStruct> EntryNodes, bool FullInitialize, FString& OutVariableName);
 
-    static FString GenerateOneLineDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UObject* DefaultObject, bool LeftAllAssetRefInBlueprint);
+    static FString GenerateOneLineDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UObject* DefaultObject);
 
     static FString GetStableFieldIdentifier(const UField* Field);
 
@@ -217,7 +218,7 @@ public:
 
     static FString GetPinType(FEdGraphPinType& PinType, bool HideUselessTypeDeclaration);
 
-    static FString GetPropertyType(FProperty* Property);
+    static BLUEPRINTNATIVIZATIONV2_API FString GetPropertyType(FProperty* Property);
     static FString ConvertArrayValue(UEdGraphPin* SourcePin, const FEdGraphPinType& TargetType, const FString& Expression);
 
     static TArray<FProperty*> GetExposeOnSpawnProperties(UClass* Class);

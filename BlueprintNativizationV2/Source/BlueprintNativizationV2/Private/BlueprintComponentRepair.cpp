@@ -6,6 +6,48 @@
 #include "Engine/SimpleConstructionScript.h"
 #include "Misc/PackageName.h"
 #include "UObject/LinkerLoad.h"
+#include "Components/ActorComponent.h"
+#include "GameFramework/Actor.h"
+#include "UObject/UnrealType.h"
+
+TArray<UActorComponent*> FBlueprintComponentRepair::FindUnmatchedConstructionComponents(AActor* Actor)
+{
+    TArray<UActorComponent*> Components;
+    TArray<const UBlueprintGeneratedClass*> Hierarchy;
+    if (!Actor || Actor->IsTemplate() || Actor->IsActorBeingDestroyed() ||
+        !UBlueprintGeneratedClass::GetGeneratedClassesHierarchy(Actor->GetClass(), Hierarchy))
+    {
+        return Components;
+    }
+    for (UActorComponent* Component : Actor->GetComponents())
+    {
+        if (!IsValid(Component) || Component->IsBeingDestroyed() || Component->IsVisualizationComponent() ||
+            Component->CreationMethod != EComponentCreationMethod::SimpleConstructionScript ||
+            Component->GetArchetype() != Component->GetClass()->GetDefaultObject())
+        {
+            continue;
+        }
+        bool bHasSource = false;
+        for (const UBlueprintGeneratedClass* BlueprintClass : Hierarchy)
+        {
+            if (BlueprintClass->SimpleConstructionScript &&
+                BlueprintClass->SimpleConstructionScript->FindSCSNode(Component->GetFName()))
+            {
+                bHasSource = true;
+                break;
+            }
+        }
+        for (TFieldIterator<FObjectPropertyBase> Property(Actor->GetClass()); Property && !bHasSource; ++Property)
+        {
+            bHasSource = Property->GetObjectPropertyValue_InContainer(Actor) == Component;
+        }
+        if (!bHasSource)
+        {
+            Components.Add(Component);
+        }
+    }
+    return Components;
+}
 
 bool FBlueprintComponentRepair::HasRepairs() const
 {

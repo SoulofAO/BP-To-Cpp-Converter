@@ -9,40 +9,37 @@
 #include "GenerationGraphContext.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "Engine/Blueprint.h"
+#include "NativeApiCatalog.h"
+#include "K2Node_CallFunction.h"
 
 FGenerateResultStruct UTemporaryVariableTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node,
     UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
 {
-    if (Node->IsA<UK2Node_Copy>() || Node->IsA<UK2Node_PureAssignmentStatement>())
+    if (Node->IsA<UK2Node_PureAssignmentStatement>())
     {
-        if (const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(Node))
+        FNativeApiCatalog::AddError(TEXT("PureAssignmentStatement requires compiler-dependent ordering of side effects and is not supported by direct graph traversal: ") + Node->GetPathName());
+        return {};
+    }
+    if (UK2Node_Copy* Copy = Cast<UK2Node_Copy>(Node))
+    {
+        if (const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(Subsystem->GetEvaluationKey(Node)))
         {
             return *Cached;
         }
         FGenerateResultStruct Result;
-        if (UK2Node_Copy* Copy = Cast<UK2Node_Copy>(Node))
         {
             const FGenerateResultStruct Input = Subsystem->GenerateInputParameterCodeForNode(Node,
                 Copy->GetInputReferencePin(), 0, MacroStack);
-            FString Name = Subsystem->GetNodeStateName(Node, TEXT("CopiedValue"));
+            FString Name = Subsystem->GetNodeStateName(Node, TEXT("CopiedValue"), true);
             if (Subsystem->DataConsumer)
             {
-                Name = Subsystem->GetNodeStateName(Subsystem->DataConsumer, Subsystem->InputEvaluationPurpose + Name);
+                Name = Subsystem->GetNodeStateName(Subsystem->DataConsumer, Subsystem->InputEvaluationPurpose + Name, true);
             }
             Result.Code = Name;
             Result.Preparations = Input.Preparations;
             Result.Preparations.Add(FString::Format(TEXT("auto {0} = {1};\n"), { Name, Input.Code }));
         }
-        else
-        {
-            UK2Node_PureAssignmentStatement* Assignment = CastChecked<UK2Node_PureAssignmentStatement>(Node);
-            Result = Subsystem->GenerateInputParameterCodeForNode(Node, Assignment->GetVariablePin(), 0, MacroStack);
-            const FGenerateResultStruct Value = Subsystem->GenerateInputParameterCodeForNode(Node,
-                Assignment->GetValuePin(), 0, MacroStack);
-            Result.Preparations.Append(Value.Preparations);
-            Result.Preparations.Add(FString::Format(TEXT("{0} = {1};\n"), { Result.Code, Value.Code }));
-        }
-        Subsystem->PureFunctionCalls.Add(Node, Result);
+        Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
         return Result;
     }
     return Subsystem->GetNodeStateName(Node, TEXT("State"));
@@ -105,6 +102,18 @@ FString UTemporaryVariableTranslatorObject::GenerateCodeFromNode(UK2Node* Node, 
     RequiredPreparations.Append(Value.Preparations);
     FString Content = GenerateNewPreparations(Preparations, RequiredPreparations);
     Preparations.Append(RequiredPreparations);
-    Content += FString::Format(TEXT("{0} = {1};\n"), { Variable.Code, Value.Code });
+    FString Destination = Variable.Code;
+    TArray<UK2Node*> TargetStack = MacroStack;
+    UEdGraphPin* Source = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Target, 0, false, TargetStack, Subsystem);
+    if (Source)
+    {
+        UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Source->GetOwningNode());
+        if (Call && Call->IsNodePure() && Source == Call->GetReturnValuePin() && !Source->PinType.bIsReference)
+        {
+            Destination = Subsystem->GetNodeStateName(Node, TEXT("AssignmentTarget"), true);
+            Content += FString::Format(TEXT("auto {0} = {1};\n"), {Destination, Variable.Code});
+        }
+    }
+    Content += FString::Format(TEXT("{0} = {1};\n"), { Destination, Value.Code });
     return Content;
 }

@@ -65,6 +65,7 @@ public class BlueprintNativizationV2 : ModuleRules
                 "KismetCompiler",
                 "Kismet",
 				"UnrealEd",
+                "GameProjectGeneration",
 				"ToolMenus",
 				"EditorStyle",
 				"DeveloperSettings",

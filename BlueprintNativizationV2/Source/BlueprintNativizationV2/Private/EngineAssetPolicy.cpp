@@ -1,3 +1,4 @@
+#include "AssetRegistry/AssetData.h"
 #include "EngineAssetPolicy.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Blueprint/BlueprintSupport.h"

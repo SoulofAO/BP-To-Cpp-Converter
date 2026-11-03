@@ -84,6 +84,8 @@ void FNativeApiCatalog::BeginGeneration(bool bAllowSourceFallback)
     }
 }
 
+static bool IsUnconditionalDeclaration(const TSharedPtr<FJsonObject>& Declaration);
+
 static TSharedPtr<FJsonObject> FindCatalogType(const TSharedPtr<FJsonObject> &Catalog, const FString &Name)
 {
     FString ResolvedName = Name;
@@ -100,7 +102,7 @@ static TSharedPtr<FJsonObject> FindCatalogType(const TSharedPtr<FJsonObject> &Ca
         const auto Type = Value->AsObject();
         bool bDefinition = false;
         if (Type->GetStringField(TEXT("Name")) == ResolvedName &&
-            Type->TryGetBoolField(TEXT("Definition"), bDefinition) && bDefinition)
+            Type->TryGetBoolField(TEXT("Definition"), bDefinition) && bDefinition && IsUnconditionalDeclaration(Type))
         {
             return Type;
         }
@@ -338,59 +340,36 @@ static FString NormalizeForwardingType(FString Type)
     return Type;
 }
 
-bool FNativeApiCatalog::CanCallFunctionDirectly(UFunction* Function, UClass* CallingClass)
+static FString GetCallableValueType(FString Type)
 {
-    const auto Owner = FindType(Function->GetOwnerClass());
-    if (!Owner || Owner->GetStringField(TEXT("Include")).IsEmpty())
+    Type = NormalizeForwardingType(Type);
+    Type.RemoveFromStart(TEXT("const"));
+    Type.RemoveFromEnd(TEXT("&"));
+    Type.RemoveFromEnd(TEXT("const"));
+    if (Type.EndsWith(TEXT("const*")))
     {
-        return false;
+        Type.LeftChopInline(6);
+        Type += TEXT("*");
     }
-    int32 ParameterCount = 0;
-    for (TFieldIterator<FProperty> Parameter(Function); Parameter; ++Parameter)
+    if (Type.StartsWith(TEXT("TEnumAsByte<")) && Type.EndsWith(TEXT(">")))
     {
-        if (Parameter->HasAnyPropertyFlags(CPF_Parm) && !Parameter->HasAnyPropertyFlags(CPF_ReturnParm))
-        {
-            ++ParameterCount;
-        }
+        Type = Type.Mid(12, Type.Len() - 13);
     }
-    int32 MatchingDeclarations = 0;
-    bool bAvailable = false;
-    for (const auto& Value : Owner->GetArrayField(TEXT("Callables")))
-    {
-        const auto Callable = Value->AsObject();
-        if (Callable->GetStringField(TEXT("Name")) != Function->GetName() ||
-            Callable->GetBoolField(TEXT("Static")) != Function->HasAnyFunctionFlags(FUNC_Static) ||
-            Callable->GetArrayField(TEXT("Parameters")).Num() != ParameterCount)
-        {
-            continue;
-        }
-        bool bHasHeaderDeclaration = false;
-        for (const auto& Evidence : Callable->GetArrayField(TEXT("Evidence")))
-        {
-            bHasHeaderDeclaration |= Evidence->AsObject()->GetStringField(TEXT("File")).EndsWith(TEXT(".h"));
-        }
-        if (!bHasHeaderDeclaration)
-        {
-            continue;
-        }
-        ++MatchingDeclarations;
-        const bool bAccessible = Callable->GetIntegerField(TEXT("Access")) == 1 ||
-            (Callable->GetIntegerField(TEXT("Access")) == 2 && CallingClass && CallingClass->IsChildOf(Function->GetOwnerClass()));
-        bAvailable = bAccessible && Callable->GetBoolField(TEXT("AccessVerified")) &&
-            !Callable->GetBoolField(TEXT("Deleted")) && IsUnconditionalDeclaration(Callable) &&
-            (Owner->GetBoolField(TEXT("Exported")) || Callable->GetBoolField(TEXT("Exported")) || Callable->GetBoolField(TEXT("InlineDefinition")));
-    }
-    return MatchingDeclarations == 1 && bAvailable;
+    return Type;
 }
 
-TSharedPtr<FJsonObject> FNativeApiCatalog::FindCallable(UFunction* Function)
+TSharedPtr<FJsonObject> FNativeApiCatalog::ResolveCallable(UFunction* Function)
 {
-    if (!Function || !Function->HasAnyFunctionFlags(FUNC_Native))
+    if (!Function)
     {
         return nullptr;
     }
-    const auto Owner = FindType(Function->GetOwnerClass());
-    if (!Owner)
+    TSharedPtr<FJsonObject> Owner = FindType(Function->GetOwnerClass());
+    if (Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface))
+    {
+        Owner = FindPublicDeclaration(TEXT("I") + Function->GetOwnerClass()->GetName());
+    }
+    if (!Owner || Owner->GetStringField(TEXT("Include")).IsEmpty())
     {
         return nullptr;
     }
@@ -406,35 +385,70 @@ TSharedPtr<FJsonObject> FNativeApiCatalog::FindCallable(UFunction* Function)
     for (const auto& Value : Owner->GetArrayField(TEXT("Callables")))
     {
         const auto Callable = Value->AsObject();
+        const auto& NativeParameters = Callable->GetArrayField(TEXT("Parameters"));
         if (Callable->GetStringField(TEXT("Name")) != Function->GetName() ||
-            Callable->GetArrayField(TEXT("Parameters")).Num() != Parameters.Num() || Callable->GetStringField(TEXT("Body")).IsEmpty())
+            Callable->GetBoolField(TEXT("Static")) != Function->HasAnyFunctionFlags(FUNC_Static) ||
+            Callable->GetBoolField(TEXT("Const")) != Function->HasAnyFunctionFlags(FUNC_Const) ||
+            NativeParameters.Num() != Parameters.Num() || Callable->GetBoolField(TEXT("Deleted")))
         {
             continue;
         }
-        if (Selected || !Callable->GetBoolField(TEXT("AccessVerified")) || !IsUnconditionalDeclaration(Callable) ||
-            Callable->GetBoolField(TEXT("Deleted")))
+        bool bMatches = Callable->GetBoolField(TEXT("AccessVerified")) && IsUnconditionalDeclaration(Callable);
+        bool bHasHeader = false;
+        for (const auto& Evidence : Callable->GetArrayField(TEXT("Evidence")))
         {
-            return nullptr;
+            bHasHeader |= Evidence->AsObject()->GetStringField(TEXT("File")).EndsWith(TEXT(".h"));
         }
-        const auto& NativeParameters = Callable->GetArrayField(TEXT("Parameters"));
-        for (int32 ParameterIndex = 0; ParameterIndex < Parameters.Num(); ++ParameterIndex)
+        for (int32 ParameterIndex = 0; bMatches && ParameterIndex < Parameters.Num(); ++ParameterIndex)
         {
-            const auto NativeParameter = NativeParameters[ParameterIndex]->AsObject();
             FString ExtendedType;
             FString ReflectedType = Parameters[ParameterIndex]->GetCPPType(&ExtendedType);
             ReflectedType += ExtendedType;
-            FString NativeType = NormalizeForwardingType(NativeParameter->GetStringField(TEXT("Type")));
-            NativeType.RemoveFromStart(TEXT("const"));
-            NativeType.RemoveFromEnd(TEXT("&"));
-            if (NativeParameter->GetStringField(TEXT("Name")) != Parameters[ParameterIndex]->GetName() ||
-                NativeType != NormalizeForwardingType(ReflectedType))
-            {
-                return nullptr;
-            }
+            const FString NativeType = NativeParameters[ParameterIndex]->AsObject()->GetStringField(TEXT("Type"));
+            bMatches = !NativeType.Contains(TEXT("&&")) &&
+                GetCallableValueType(NativeType) == GetCallableValueType(ReflectedType);
+        }
+        if (!bMatches || !bHasHeader)
+        {
+            continue;
+        }
+        if (Selected && Selected->GetStringField(TEXT("Signature")) != Callable->GetStringField(TEXT("Signature")))
+        {
+            return nullptr;
         }
         Selected = Callable;
     }
     return Selected;
+}
+
+bool FNativeApiCatalog::CanCallFunctionDirectly(UFunction* Function, UClass* CallingClass)
+{
+    const auto Callable = ResolveCallable(Function);
+    if (!Callable)
+    {
+        return false;
+    }
+    auto Owner = FindType(Function->GetOwnerClass());
+    if (Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface))
+    {
+        Owner = FindPublicDeclaration(TEXT("I") + Function->GetOwnerClass()->GetName());
+    }
+    const bool bAccessible = Callable->GetIntegerField(TEXT("Access")) == 1 ||
+        (Callable->GetIntegerField(TEXT("Access")) == 2 && CallingClass && CallingClass->IsChildOf(Function->GetOwnerClass()));
+    const bool bNativeInterfaceDispatch = Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface) &&
+        Callable->GetBoolField(TEXT("Virtual"));
+    return bAccessible && (Owner->GetBoolField(TEXT("Exported")) || Callable->GetBoolField(TEXT("Exported")) ||
+        Callable->GetBoolField(TEXT("InlineDefinition")) || bNativeInterfaceDispatch);
+}
+
+TSharedPtr<FJsonObject> FNativeApiCatalog::FindCallable(UFunction* Function)
+{
+    const auto Callable = ResolveCallable(Function);
+    if (Callable && !Callable->GetStringField(TEXT("Body")).IsEmpty())
+    {
+        return Callable;
+    }
+    return nullptr;
 }
 
 static TSharedPtr<FJsonObject> FindIndexedValueType(const FString& NativeName)
@@ -699,12 +713,38 @@ bool FNativeApiCatalog::FindEventOverride(UClass* Class, UFunction* Event, UClas
             Diagnostic = TEXT("The cached body could not be tokenized for access validation.");
             return true;
         }
+        TArray<TSharedPtr<FJsonObject>> ReferencedTypes;
+        ReferencedTypes.Add(Type);
         for (UClass* AccessOwner = Owner; AccessOwner; AccessOwner = AccessOwner->GetSuperClass())
         {
             const TSharedPtr<FJsonObject> AccessType = FindType(AccessOwner);
             if (!AccessType)
             {
                 continue;
+            }
+            ReferencedTypes.AddUnique(AccessType);
+            for (TFieldIterator<FObjectPropertyBase> Property(AccessOwner, EFieldIteratorFlags::ExcludeSuper); Property; ++Property)
+            {
+                const std::string PropertyName(TCHAR_TO_UTF8(*Property->GetName()));
+                bool bUsesProperty = false;
+                for (const FCppToken& Token : *Tokens)
+                {
+                    if (Token.Kind != "Comment" && Token.Spelling == PropertyName)
+                    {
+                        bUsesProperty = true;
+                        break;
+                    }
+                }
+                if (bUsesProperty)
+                {
+                    const TSharedPtr<FJsonObject> PropertyType = FindType(Property->PropertyClass);
+                    if (PropertyType && !PropertyType->GetStringField(TEXT("Include")).IsEmpty())
+                    {
+                        ReferencedTypes.AddUnique(PropertyType);
+                        Includes.Add(PropertyType->GetStringField(TEXT("Include")));
+                        Modules.Add(PropertyType->GetStringField(TEXT("Module")));
+                    }
+                }
             }
             for (const FString& Collection : {TEXT("Members"), TEXT("Callables")})
             {
@@ -784,6 +824,7 @@ bool FNativeApiCatalog::FindEventOverride(UClass* Class, UFunction* Event, UClas
                     }
                     continue;
                 }
+                ReferencedTypes.AddUnique(Dependency);
                 const FString Include = Dependency->GetStringField(TEXT("Include"));
                 if (Include.IsEmpty())
                 {
@@ -793,6 +834,38 @@ bool FNativeApiCatalog::FindEventOverride(UClass* Class, UFunction* Event, UClas
                 }
                 Includes.Add(Include);
                 Modules.Add(Dependency->GetStringField(TEXT("Module")));
+            }
+        }
+        TSet<FString> CalledNames;
+        for (size_t TokenIndex = 0; TokenIndex + 1 < Tokens->size(); ++TokenIndex)
+        {
+            if ((*Tokens)[TokenIndex].Kind == "Identifier" && (*Tokens)[TokenIndex + 1].Spelling == "(")
+            {
+                CalledNames.Add(UTF8_TO_TCHAR((*Tokens)[TokenIndex].Spelling.c_str()));
+            }
+        }
+        for (int32 TypeIndex = 0; TypeIndex < ReferencedTypes.Num(); ++TypeIndex)
+        {
+            const TSharedPtr<FJsonObject> ReceiverType = ReferencedTypes[TypeIndex];
+            for (const TSharedPtr<FJsonValue>& CallableValue : ReceiverType->GetArrayField(TEXT("Callables")))
+            {
+                const TSharedPtr<FJsonObject> Callable = CallableValue->AsObject();
+                if (!CalledNames.Contains(Callable->GetStringField(TEXT("Name"))))
+                {
+                    continue;
+                }
+                FRegexMatcher ReturnTypes(FRegexPattern(TEXT("[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*")),
+                    Callable->GetStringField(TEXT("ReturnType")));
+                while (ReturnTypes.FindNext())
+                {
+                    const TSharedPtr<FJsonObject> ReturnType = FindIndexedValueType(ReturnTypes.GetCaptureGroup(0));
+                    if (ReturnType && !ReturnType->GetStringField(TEXT("Include")).IsEmpty())
+                    {
+                        ReferencedTypes.AddUnique(ReturnType);
+                        Includes.Add(ReturnType->GetStringField(TEXT("Include")));
+                        Modules.Add(ReturnType->GetStringField(TEXT("Module")));
+                    }
+                }
             }
         }
         return true;

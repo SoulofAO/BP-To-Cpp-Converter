@@ -5,12 +5,16 @@
  */
 
 #include "BlueprintNativizationSettings.h"
+#include "TranslatorObjects/ContainerLoopTranslatorObject.h"
+#include "TranslatorObjects/TextExpressionTranslatorObject.h"
+#include "TranslatorObjects/EnumLoopTranslatorObject.h"
 #include "TranslatorObjects/NativeValueStructTranslator.h"
 #include "TranslatorObjects/SpecializedStructTranslators.h"
 #include "TranslatorObjects/BranchTranslatorObject.h"
 #include "TranslatorObjects/ClassDefaultsTranslatorObject.h"
 #include "TranslatorObjects/InputEventTranslatorObject.h"
 #include "TranslatorObjects/CallFunctionTranslatorObject.h"
+#include "TranslatorObjects/ConvertAssetTranslatorObject.h"
 #include "TranslatorObjects/CallParentTranslatorObject.h"
 #include "TranslatorObjects/Latens/DelayTranslatorObject.h"
 #include "TranslatorObjects/Latens/DelayNextTickTranslatorObject.h"
@@ -38,6 +42,8 @@
 #include "TranslatorObjects/Delegates/RemoveAllDelegateTranslatorObject.h"
 #include "TranslatorObjects/Delegates/CreateDelegateTranslatorObject.h"
 #include "TranslatorObjects/DynamicCastTranslatorObject.h"
+#include "TranslatorObjects/Latens/AsyncTaskTranslatorObject.h"
+#include "TranslatorObjects/DataTableRowTranslatorObject.h"
 
 #include "TranslatorObjects/MakeStructTranslatorObject.h"
 #include "TranslatorObjects/BreakStructTranslatorObject.h"
@@ -79,6 +85,10 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 
 	TranslatorBPToCPPObjects =
 	{
+        UEnumLoopTranslatorObject::StaticClass(),
+        UTextExpressionTranslatorObject::StaticClass(),
+        UContainerLoopTranslatorObject::StaticClass(),
+        UDataTableRowTranslatorObject::StaticClass(),
 		// Highest Priority
 		UBranchTranslatorObject::StaticClass(),
         UClassDefaultsTranslatorObject::StaticClass(),
@@ -86,6 +96,7 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 		UDelayTranslatorObject::StaticClass(),
 		UDelayNextTickTranslatorObject::StaticClass(),
 		UAIMoveToTranslatorObject::StaticClass(),
+        UAsyncTaskTranslatorObject::StaticClass(),
 		URetriggarableDelayTranslatorObject::StaticClass(),
 		UForEachLoopTranslatorObject::StaticClass(),
 		UForLoopTranslatorObject::StaticClass(),
@@ -108,6 +119,7 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 		URemoveAllDelegateTranslatorObject::StaticClass(),
 		UCreateDelegateTranslatorObject::StaticClass(),
 		UDynamicCastTranslatorObject::StaticClass(),
+        UConvertAssetTranslatorObject::StaticClass(),
 
 		USetMemberStructTranslatorObject::StaticClass(),
 		UGetSubsystemTranslatorObject::StaticClass(),

@@ -6,6 +6,7 @@
 
 
 #pragma once
+#include "Kismet/BlueprintFunctionLibrary.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"

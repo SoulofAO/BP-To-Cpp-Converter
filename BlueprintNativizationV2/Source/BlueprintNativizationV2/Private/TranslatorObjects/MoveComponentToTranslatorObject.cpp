@@ -77,8 +77,8 @@ void UMoveComponentToTranslatorObject::GenerateNewFunction(UK2Node* InputNode, T
 		EPinExcludeFilter::None,
 		EPinIncludeOnlyFilter::ExecPin)[0];
 
-	TArray<UK2Node*> MacroStack;
-	UEdGraphPin* NonKnotPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin,0, true, MacroStack, NativizationV2Subsystem);
+	TArray<UK2Node*> MacroStack = Path;
+	UEdGraphPin* NonKnotPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin,0, false, MacroStack, NativizationV2Subsystem);
 	if (!NonKnotPin)
 	{
 		return;
@@ -95,6 +95,8 @@ void UMoveComponentToTranslatorObject::GenerateNewFunction(UK2Node* InputNode, T
 	{
 		FGenerateFunctionStruct NewStruct;
 		NewStruct.Node = TargetNode;
+        NewStruct.MacroStack = MacroStack;
+        NewStruct.EntryPinName = NonKnotPin->GetName();
 		NewStruct.Name = *UBlueprintNativizationLibrary::GetUniqueEntryNodeName(TargetNode, EntryNodes, TEXT("MoveComponent"));
 		EntryNodes.Add(NewStruct);
 	}

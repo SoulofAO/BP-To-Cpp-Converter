@@ -173,7 +173,7 @@ FGenerateResultStruct UDynamicCastTranslatorObject::GenerateInputParameterCodeFo
         return UBlueprintNativizationLibrary::GetUniquePinName(Pin, Subsystem->EntryNodes);
     }
     FGenerateResultStruct Result;
-    if (const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(Node))
+    if (const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(Subsystem->GetEvaluationKey(Node)))
     {
         Result = *Cached;
     }
@@ -187,7 +187,7 @@ FGenerateResultStruct UDynamicCastTranslatorObject::GenerateInputParameterCodeFo
         }
         Result.Preparations.Add(FString::Format(TEXT("const auto {0} = {1};\n"), { ResultName, Result.Code }));
         Result.Code = ResultName;
-        Subsystem->PureFunctionCalls.Add(Node, Result);
+        Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
     }
     if (Pin == CastNode->GetBoolSuccessPin())
     {

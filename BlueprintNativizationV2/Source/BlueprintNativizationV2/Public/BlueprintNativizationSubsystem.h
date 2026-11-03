@@ -50,10 +50,10 @@ public:
         bool InputTransformOnlyOneFileCode = true, 
         bool HotReloadAndReplace = false,
         bool MergeWithExistModule = false, 
-        bool SaveCache = false, bool NewLeftAllAssetRefInBlueprint = true, FString SaveCachePath = "", bool bContinueOnError = false);
+        bool SaveCache = false, FString SaveCachePath = "", bool bContinueOnError = false);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
-    FNativizationCode RunNativizationForOneFunctionBlueprint(UBlueprint* InputTarget, bool NewLeftAllAssetRefInBlueprint, FString FunctionName = "");
+    FNativizationCode RunNativizationForOneFunctionBlueprint(UBlueprint* InputTarget, FString FunctionName = "");
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
     void PrepareNewModuleToWork();
@@ -78,9 +78,6 @@ public:
     TFunction<bool(int32, int32, const FString&)> OperationProgress;
 
     UPROPERTY(BlueprintReadOnly, Category = "Nativization")
-    bool LeftAllAssetRefInBlueprint = true;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Nativization")
     TArray<UTranslatorBPToCppObject*> TranslatorObjects;
 
     TArray<FGenerateFunctionStruct> EntryNodes;
@@ -102,15 +99,15 @@ public:
 
     void CreateJSONCache(FString CacheDirectory);
     bool TryPrepareNewModule(FString& Error);
-    bool CaptureConfigurationTemplates(const TMap<UField*, FName>& TranslatedObjects, const TMap<FString, FString>& MemberNames, bool bKeepAssetReferencesInBlueprint, TSharedPtr<FJsonObject>& Result, FString& Error) const;
-    bool WriteJSONCache(FString CacheDirectory, const TMap<UField*, FName>& TranslatedObjects, const TMap<FString, FString>& MemberNames = {}, const TMap<FString, FString>& DefaultOnlyClassReplacements = {}, bool bKeepAssetReferencesInBlueprint = true);
+    bool CaptureConfigurationTemplates(const TMap<UField*, FName>& TranslatedObjects, const TMap<FString, FString>& MemberNames, TSharedPtr<FJsonObject>& Result, FString& Error) const;
+    bool WriteJSONCache(FString CacheDirectory, const TMap<UField*, FName>& TranslatedObjects, const TMap<FString, FString>& MemberNames = {}, const TMap<FString, FString>& DefaultOnlyClassReplacements = {});
     TMap<FString, FString> CaptureMigrationMemberNames() const;
     TMap<FString, FString> CaptureMigrationClassReplacements() const;
-    bool ApplyMigrationTypes(const TMap<UField*, UField*>& TypeMappings, const TMap<FString, FString>& MemberNames, FString& Error, bool bPreviewOnly = false, const TMap<UClass*, UClass*>& DefaultOnlyClassReplacements = {}, bool bContinueOnError = false, bool bKeepAssetReferencesInBlueprint = true, const TSharedPtr<FJsonObject>& ConfigurationTemplates = nullptr);
+    bool ApplyMigrationTypes(const TMap<UField*, UField*>& TypeMappings, const TMap<FString, FString>& MemberNames, FString& Error, bool bPreviewOnly = false, const TMap<UClass*, UClass*>& DefaultOnlyClassReplacements = {}, bool bContinueOnError = false, const TSharedPtr<FJsonObject>& ConfigurationTemplates = nullptr);
     bool TryReapplyJSONCache(FString CacheFilePath, FString& Error, bool bPreviewOnly = false, FString* Summary = nullptr, bool bContinueOnError = false);
 
     UFUNCTION(BlueprintCallable, Category = "Nativization")
-    void ReapplyJSONCache(FString CacheFilePath);
+    bool ReapplyJSONCache(FString CacheFilePath);
 
     bool HasNewClassesAfterHotReload();
 
@@ -191,10 +188,17 @@ public:
     TArray<UK2Node*> ActiveLoopNodes;
     TMap<UEdGraphPin*, FString> PersistentEntryParameters;
     void RegisterPersistentEntryParameters();
-    TMap<UK2Node*, FGenerateResultStruct> PureFunctionCalls;
-    TMap<UEdGraphNode*, int32> PureExecutionOrder;
+    TMap<FString, FGenerateResultStruct> PureFunctionCalls;
+    TMap<FString, FGenerateResultStruct> InputValues;
+    TSet<FString> ActiveInputValues;
+    FGenerationPreparations EmittedInputPreparations;
+    TArray<UK2Node*> CurrentMacroStack;
+    TArray<FGenerationNodeInstance> GetNodeInstances(UK2Node* EntryNode, const TArray<UK2Node*>& MacroStack, bool bIncludeInputs);
+    uint64 EvaluationSequence = 0;
+    uint64 CurrentEvaluation = 0;
+    FString GetEvaluationKey(UK2Node* Node) const;
+    FGenerateResultStruct GenerateUncachedInputParameter(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack);
     FString GeneratePurePreparations(UK2Node* Consumer, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations);
-    TMap<UK2Node*, FString> ExpandedNodeNames;
     FString GetNodeStateName(UK2Node* Node, const FString& Suffix, bool bLocal = false);
     UEdGraphPin* FindCommonExecutionTail(UEdGraphPin* FirstBranch, UEdGraphPin* SecondBranch);
     UEdGraphPin* FindCommonExecutionTail(const TArray<UEdGraphPin*>& Branches);

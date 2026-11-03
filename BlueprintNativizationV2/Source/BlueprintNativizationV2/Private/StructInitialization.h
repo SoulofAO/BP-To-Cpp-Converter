@@ -3,6 +3,10 @@
 #include "TranslatorObjects/StructTranslatorObject.h"
 #include "UObject/StructOnScope.h"
 
+class UEdGraphPin;
+class UNativizationV2Subsystem;
+struct FGenerateResultStruct;
+
 class FStructInitialization
 {
 public:
@@ -13,6 +17,8 @@ public:
     static FString Number(float Value);
     static FString Quote(const FString& Value);
     static FString PropertyExpression(FProperty* Property, const void* Value, const FStructTranslationRequest& Request);
+    static bool TryReadNativeMember(UScriptStruct* Structure, UEdGraphPin* StructurePin, FName MemberName,
+        const FString& SourceExpression, UNativizationV2Subsystem* Subsystem, FGenerateResultStruct& Result);
     static bool Describe(const FStructTranslationRequest& Request, FStructTranslationResult& Result,
         const FString& NativeType, const FString& Include, const FString& Module);
     static bool Fallback(const FStructTranslationRequest& Request, FStructTranslationResult& Result,

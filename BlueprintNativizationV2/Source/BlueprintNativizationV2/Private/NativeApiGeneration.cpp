@@ -24,6 +24,47 @@ static bool IsUnconditionalCallable(const TSharedPtr<FJsonObject> &Callable)
     return true;
 }
 
+static bool IsHeaderDefinedCallable(const TSharedPtr<FJsonObject>& Callable)
+{
+    if (Callable->GetBoolField(TEXT("Exported")) || Callable->GetBoolField(TEXT("InlineDefinition")))
+    {
+        return true;
+    }
+    if (!Callable->GetBoolField(TEXT("Constructor")) || !Callable->GetArrayField(TEXT("Parameters")).IsEmpty())
+    {
+        return false;
+    }
+    const FString Signature = Callable->GetStringField(TEXT("Name")) + TEXT("()");
+    for (const auto& EvidenceValue : Callable->GetArrayField(TEXT("Evidence")))
+    {
+        const auto Evidence = EvidenceValue->AsObject();
+        if (!Evidence->GetStringField(TEXT("File")).EndsWith(TEXT(".h")))
+        {
+            continue;
+        }
+        FString Text = Evidence->GetStringField(TEXT("Text"));
+        Text.ReplaceInline(TEXT(" "), TEXT(""));
+        Text.ReplaceInline(TEXT("\t"), TEXT(""));
+        Text.ReplaceInline(TEXT("\r"), TEXT(""));
+        Text.ReplaceInline(TEXT("\n"), TEXT(""));
+        if (Text.EndsWith(Signature + TEXT("=default;")) && !Text.Contains(TEXT("::") + Signature))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool HasEmptyConstructorBody(const TSharedPtr<FJsonObject>& Callable)
+{
+    FString Body = Callable->GetStringField(TEXT("Body"));
+    Body.ReplaceInline(TEXT(" "), TEXT(""));
+    Body.ReplaceInline(TEXT("\t"), TEXT(""));
+    Body.ReplaceInline(TEXT("\r"), TEXT(""));
+    Body.ReplaceInline(TEXT("\n"), TEXT(""));
+    return Body == TEXT("{}");
+}
+
 bool UBlueprintNativizationSettingsLibrary::FindConstructorDescriptorByStruct(UStruct *OwnerStruct,
                                                                               FConstructorDescriptor &OutNativeDesc)
 {
@@ -48,7 +89,7 @@ bool UBlueprintNativizationSettingsLibrary::FindConstructorDescriptorByStruct(US
     {
         const auto Callable = Value->AsObject();
         if (!Callable->GetBoolField(TEXT("Constructor")) || Callable->GetIntegerField(TEXT("Access")) != 1 ||
-            !IsUnconditionalCallable(Callable))
+            !IsUnconditionalCallable(Callable) || !IsHeaderDefinedCallable(Callable) || !HasEmptyConstructorBody(Callable))
         {
             continue;
         }
@@ -194,9 +235,17 @@ bool UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescrip
     if (Getters.Num() == 1)
     {
         Result.GetterPropertyFunctionName = Getters.Array()[0];
+        FString SetterName;
         if (Result.GetterPropertyFunctionName.StartsWith(TEXT("Get")))
         {
-            const FString SetterName = TEXT("Set") + Result.GetterPropertyFunctionName.RightChop(3);
+            SetterName = TEXT("Set") + Result.GetterPropertyFunctionName.RightChop(3);
+        }
+        else if (Property->IsA<FBoolProperty>() && Result.GetterPropertyFunctionName.StartsWith(TEXT("Is")))
+        {
+            SetterName = TEXT("Set") + Result.GetterPropertyFunctionName.RightChop(2);
+        }
+        if (!SetterName.IsEmpty())
+        {
             int32 CandidateCount = 0;
             for (const auto &Value : Type->GetArrayField(TEXT("Callables")))
             {
@@ -443,6 +492,8 @@ static bool InitializeStructureFromCache(const FStructTranslationRequest& Reques
     }
     bool bHasConstructors = false;
     bool bDefaultConstructor = false;
+    bool bForceInitConstructor = false;
+    TMap<FString, FString> DefaultMemberInitializers;
     for (const auto& CallableValue : Type->GetArrayField(TEXT("Callables")))
     {
         const auto Callable = CallableValue->AsObject();
@@ -452,20 +503,42 @@ static bool InitializeStructureFromCache(const FStructTranslationRequest& Reques
         }
         bHasConstructors = true;
         bool bHasRequiredParameter = false;
-        for (const auto& Parameter : Callable->GetArrayField(TEXT("Parameters")))
+        const auto& Parameters = Callable->GetArrayField(TEXT("Parameters"));
+        for (const auto& Parameter : Parameters)
         {
             bHasRequiredParameter |= Parameter->AsObject()->GetStringField(TEXT("Default")).IsEmpty();
         }
-        bDefaultConstructor |= !bHasRequiredParameter && Callable->GetIntegerField(TEXT("Access")) == 1 &&
-            IsUnconditionalCallable(Callable) && (Callable->GetBoolField(TEXT("Exported")) || Callable->GetBoolField(TEXT("InlineDefinition")));
+        const bool bAccessibleDefaultConstructor = !bHasRequiredParameter && Callable->GetIntegerField(TEXT("Access")) == 1 &&
+            IsUnconditionalCallable(Callable) && IsHeaderDefinedCallable(Callable);
+        bDefaultConstructor |= bAccessibleDefaultConstructor;
+        if (bAccessibleDefaultConstructor && Parameters.IsEmpty() && HasEmptyConstructorBody(Callable))
+        {
+            for (const auto& Initializer : Callable->GetObjectField(TEXT("Initializers"))->Values)
+            {
+                DefaultMemberInitializers.Add(FString(Initializer.Key), Initializer.Value->AsString().TrimStartAndEnd());
+            }
+        }
+        bForceInitConstructor |= Parameters.Num() == 1 &&
+            Parameters[0]->AsObject()->GetStringField(TEXT("Type")) == TEXT("EForceInit") &&
+            Callable->GetIntegerField(TEXT("Access")) == 1 && IsUnconditionalCallable(Callable) &&
+            (Callable->GetBoolField(TEXT("Exported")) || Callable->GetBoolField(TEXT("InlineDefinition")));
     }
-    if (bHasConstructors && !bDefaultConstructor)
+    const bool bRequiresForceInit = Structure->GetCppStructOps() && Structure->GetCppStructOps()->HasNoopConstructor();
+    if ((bRequiresForceInit && !bForceInitConstructor) ||
+        (!bRequiresForceInit && bHasConstructors && !bDefaultConstructor))
     {
         return false;
     }
     const FString Name = FStructInitialization::VariableName(Request, Structure->GetName() + TEXT("Value"));
-    Result.Preparations.Add(Result.NativeType + TEXT(" ") + Name + TEXT("{};"));
+    FString Initialization = TEXT("{}");
+    if (bRequiresForceInit)
+    {
+        Initialization = TEXT("(ForceInit)");
+    }
+    Result.Preparations.Add(Result.NativeType + TEXT(" ") + Name + Initialization + TEXT(";"));
     FStructOnScope Defaults(Structure);
+    const bool bRequiresExplicitMembers = Structure->GetCppStructOps() &&
+        Structure->GetCppStructOps()->HasZeroConstructor();
     for (TFieldIterator<FProperty> Field(Structure); Field; ++Field)
     {
         if (Field->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated))
@@ -473,12 +546,35 @@ static bool InitializeStructureFromCache(const FStructTranslationRequest& Reques
             continue;
         }
         const void* FieldValue = Field->ContainerPtrToValuePtr<void>(Value);
-        if (Field->Identical(FieldValue, Field->ContainerPtrToValuePtr<void>(Defaults.GetStructMemory()), PPF_None))
+        bool bKnownZeroDefault = false;
+        if (const FString* Initializer = DefaultMemberInitializers.Find(Field->GetNameCPP()))
+        {
+            if (CastField<FNumericProperty>(*Field) || CastField<FBoolProperty>(*Field))
+            {
+                bKnownZeroDefault = *Initializer == TEXT("0") || *Initializer == TEXT("0.f") ||
+                    *Initializer == TEXT("0.0f") || *Initializer == TEXT("0.0");
+                if (CastField<FBoolProperty>(*Field) && *Initializer == TEXT("false"))
+                {
+                    bKnownZeroDefault = true;
+                }
+            }
+        }
+        if ((!bRequiresExplicitMembers || bKnownZeroDefault) &&
+            Field->Identical(FieldValue, Field->ContainerPtrToValuePtr<void>(Defaults.GetStructMemory()), PPF_None))
         {
             continue;
         }
         FString Assignment;
-        for (const auto& MemberValue : Type->GetArrayField(TEXT("Members")))
+        TSharedPtr<FJsonObject> FieldOwnerType = Type;
+        if (Field->GetOwnerStruct() != Structure)
+        {
+            FieldOwnerType = FNativeApiCatalog::FindType(Field->GetOwnerStruct());
+        }
+        if (!FieldOwnerType)
+        {
+            return false;
+        }
+        for (const auto& MemberValue : FieldOwnerType->GetArrayField(TEXT("Members")))
         {
             const auto Member = MemberValue->AsObject();
             if (Member->GetStringField(TEXT("Name")) == Field->GetNameCPP() && Member->GetIntegerField(TEXT("Access")) == 1 &&
@@ -499,7 +595,7 @@ static bool InitializeStructureFromCache(const FStructTranslationRequest& Reques
                 return false;
             }
             bool bAccessibleSetter = false;
-            for (const auto& CallableValue : Type->GetArrayField(TEXT("Callables")))
+            for (const auto& CallableValue : FieldOwnerType->GetArrayField(TEXT("Callables")))
             {
                 const auto Callable = CallableValue->AsObject();
                 if (Callable->GetStringField(TEXT("Name")) == Setter.SetterPropertyFunctionName &&

@@ -25,10 +25,14 @@ class BLUEPRINTNATIVIZATIONV2_API UCreateWidgetTranslatorObject : public UTransl
         NodeNamesForCheck = { };
     }
 
-    virtual bool ShouldExpandNode(UK2Node* Node) const override
+
+
+public:
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* Subsystem) override;
+    virtual bool ShouldPrepareInputs(UK2Node* Node, const FString& EntryPinName) const override { return false; }
+    virtual TSet<FString> GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateCSPrivateDependencyModuleNames(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override
     {
-        return true;
+        return {TEXT("\"UMG\"")};
     }
-
-
 };

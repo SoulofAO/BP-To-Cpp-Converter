@@ -1,24 +1,33 @@
+#include "Misc/FeedbackContext.h"
 #include "Dom/JsonObject.h"
 #include "BlueprintNativizationSubsystem.h"
+#include "BlueprintComponentRepair.h"
+#include "BlueprintPropertyBindingMigration.h"
 #include "BlueprintSubsystemReinstanceScope.h"
 #include "RetainedBlueprintGeneration.h"
+#include "NativeFunctionExpressions.h"
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationUniqueNameSubsystem.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Editor.h"
-#include "Subsystems/EditorAssetSubsystem.h"
+#include "FileHelpers.h"
 #include "Engine/Blueprint.h"
 #include "Components/Widget.h"
 #include "Engine/DataTable.h"
+#include "Engine/CompositeDataTable.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/Level.h"
+#include "LevelInstance/LevelInstanceSubsystem.h"
+#include "Engine/LevelScriptBlueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/TimelineTemplate.h"
 #include "Components/TimelineComponent.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/InheritableComponentHandler.h"
 #include "ComponentInstanceDataCache.h"
+#include "UObject/GCObject.h"
+#include "UObject/CoreRedirects.h"
 #include "GameFramework/Actor.h"
 #include "Components/ActorComponent.h"
 #include "Components/BillboardComponent.h"
@@ -37,6 +46,7 @@
 #include "K2Node_GetClassDefaults.h"
 #include "StructPrivateMemberAccess.h"
 #include "K2Node_Event.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionTerminator.h"
 #include "K2Node_Variable.h"
@@ -45,7 +55,6 @@
 #include "K2Node_Select.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
-#include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/StructureEditorUtils.h"
 #include "UserDefinedStructure/UserDefinedStructEditorData.h"
 #include "KismetCompiler.h"
@@ -320,6 +329,7 @@ struct FMigrationInstance
     int32 ComponentSerializationIndex = INDEX_NONE;
     int32 ComponentTemplateOrdinal = 0;
     bool bConstructionComponent = false;
+    bool bRetainedInstanceComponent = false;
     bool bChildActorComponentOwner = false;
     TStructOnScope<FActorComponentInstanceData> ComponentData;
     TArray<FMigrationChildActorOwner> ChildActorOwners;
@@ -328,21 +338,47 @@ struct FMigrationInstance
     FName ComponentOuterMember;
 };
 
+class FMigrationComponentDataLifetime : public FGCObject
+{
+public:
+    explicit FMigrationComponentDataLifetime(TArray<FMigrationInstance>& InInstances)
+        : Instances(InInstances)
+    {
+    }
+
+    virtual void AddReferencedObjects(FReferenceCollector& Collector) override
+    {
+        for (FMigrationInstance& Instance : Instances)
+        {
+            if (Instance.ComponentData.IsValid())
+            {
+                Instance.ComponentData.AddReferencedObjects(Collector);
+                Instance.ComponentData->AddReferencedObjects(Collector);
+            }
+        }
+    }
+
+    virtual FString GetReferencerName() const override
+    {
+        return TEXT("BlueprintMigrationComponentData");
+    }
+
+private:
+    TArray<FMigrationInstance>& Instances;
+};
+
 class FMigrationReferenceArchive : public FArchiveReplaceObjectRef<UObject>
 {
 public:
     const TMap<FSoftObjectPath, FSoftObjectPath>& SoftMappings;
     const TSet<UClass*>& DefaultOnlySourceClasses;
-    bool bKeepAssetReferencesInBlueprint;
     bool bSoftReferencesChanged = false;
 
     FMigrationReferenceArchive(UObject* Object, const TMap<UObject*, UObject*>& ObjectMappings,
-        const TMap<FSoftObjectPath, FSoftObjectPath>& InSoftMappings, const TSet<UClass*>& InDefaultOnlySourceClasses,
-        bool bInKeepAssetReferencesInBlueprint)
+        const TMap<FSoftObjectPath, FSoftObjectPath>& InSoftMappings, const TSet<UClass*>& InDefaultOnlySourceClasses)
         : FArchiveReplaceObjectRef<UObject>(Object, ObjectMappings,
             EArchiveReplaceObjectFlags::IgnoreOuterRef | EArchiveReplaceObjectFlags::IgnoreArchetypeRef |
-            EArchiveReplaceObjectFlags::DelayStart), SoftMappings(InSoftMappings), DefaultOnlySourceClasses(InDefaultOnlySourceClasses),
-            bKeepAssetReferencesInBlueprint(bInKeepAssetReferencesInBlueprint)
+            EArchiveReplaceObjectFlags::DelayStart), SoftMappings(InSoftMappings), DefaultOnlySourceClasses(InDefaultOnlySourceClasses)
     {
         SerializeSearchObject();
     }
@@ -356,13 +392,46 @@ public:
             {
                 return true;
             }
-            if (Property->GetFName() == GET_MEMBER_NAME_CHECKED(UBlueprint, ParentClass) &&
-                (bKeepAssetReferencesInBlueprint || DefaultOnlySourceClasses.Contains(Blueprint->ParentClass)))
+            if (Property->GetFName() == GET_MEMBER_NAME_CHECKED(UBlueprint, ParentClass))
             {
                 return true;
             }
         }
         return FArchiveReplaceObjectRef<UObject>::ShouldSkipProperty(Property);
+    }
+
+    virtual void SerializeObject(UObject* ObjectToSerialize) override
+    {
+        TArray<TPair<UEdGraphPin*, UBlueprint*>> ConfigurationPins;
+        if (UEdGraphNode* Node = Cast<UEdGraphNode>(ObjectToSerialize))
+        {
+            for (UEdGraphPin* Pin : Node->Pins)
+            {
+                UClass* Class = Cast<UClass>(Pin->DefaultObject);
+                UBlueprint* Blueprint = nullptr;
+                if (Class && !Class->HasAnyClassFlags(CLASS_Interface))
+                {
+                    Blueprint = Cast<UBlueprint>(Class->ClassGeneratedBy);
+                }
+                if (!Blueprint)
+                {
+                    continue;
+                }
+                if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+                {
+                    if (FNativeFunctionExpressions::IsClassFilterParameter(Call->GetTargetFunction(), Pin->PinName))
+                    {
+                        continue;
+                    }
+                }
+                ConfigurationPins.Emplace(Pin, Blueprint);
+            }
+        }
+        FArchiveReplaceObjectRef<UObject>::SerializeObject(ObjectToSerialize);
+        for (const TPair<UEdGraphPin*, UBlueprint*>& Configuration : ConfigurationPins)
+        {
+            Configuration.Key->DefaultObject = Configuration.Value->GeneratedClass.Get();
+        }
     }
 
     virtual FArchive& operator<<(UObject*& Value) override
@@ -373,13 +442,14 @@ public:
             {
                 return *this;
             }
-            if (bKeepAssetReferencesInBlueprint && Property->IsA<FClassProperty>() &&
-                !SerializingObject->IsA<UBlueprint>() && !SerializingObject->IsA<UField>() &&
-                !SerializingObject->IsA<UEdGraphNode>())
+            const bool bStructureDefault = SerializingObject->IsA<UUserDefinedStruct>() && Property->GetOwnerStruct() == SerializingObject;
+            if (Property->IsA<FClassProperty>() && (bStructureDefault ||
+                (!SerializingObject->IsA<UBlueprint>() && !SerializingObject->IsA<UField>() && !SerializingObject->IsA<UEdGraphNode>())))
             {
                 if (UClass* Class = Cast<UClass>(Value))
                 {
-                    if (UBlueprint* Blueprint = Cast<UBlueprint>(Class->ClassGeneratedBy))
+                    if (UBlueprint* Blueprint = Cast<UBlueprint>(Class->ClassGeneratedBy);
+                        Blueprint && !Class->HasAnyClassFlags(CLASS_Interface))
                     {
                         if (Blueprint->GeneratedClass)
                         {
@@ -394,7 +464,6 @@ public:
                 }
             }
         }
-        if (bKeepAssetReferencesInBlueprint)
         {
             if (UBlueprint* Blueprint = Cast<UBlueprint>(SerializingObject))
             {
@@ -416,13 +485,16 @@ public:
 
     virtual FArchive& operator<<(FSoftObjectPath& Value) override
     {
-        if (bKeepAssetReferencesInBlueprint)
         {
             if (const FProperty* Property = GetSerializedProperty())
             {
                 if (Property->IsA<FSoftClassProperty>())
                 {
-                    return *this;
+                    const UClass* Class = Cast<UClass>(Value.ResolveObject());
+                    if (!Class || !Class->HasAnyClassFlags(CLASS_Interface))
+                    {
+                        return *this;
+                    }
                 }
             }
         }
@@ -439,7 +511,6 @@ public:
 class FMigrationValues
 {
 public:
-    bool bKeepAssetReferencesInBlueprint;
     const TMap<UField*, UField*>& TypeMappings;
     const TMap<UClass*, UClass*>& DefaultOnlyClassReplacements;
     const TMap<FString, FString>& MemberNames;
@@ -458,8 +529,8 @@ public:
     FString Error;
 
     FMigrationValues(const TMap<UField*, UField*>& InTypeMappings, const TMap<FString, FString>& InMemberNames,
-        const TMap<UClass*, UClass*>& InDefaultOnlyClassReplacements, bool bInKeepAssetReferencesInBlueprint)
-        : bKeepAssetReferencesInBlueprint(bInKeepAssetReferencesInBlueprint), TypeMappings(InTypeMappings),
+        const TMap<UClass*, UClass*>& InDefaultOnlyClassReplacements)
+        : TypeMappings(InTypeMappings),
         DefaultOnlyClassReplacements(InDefaultOnlyClassReplacements), MemberNames(InMemberNames)
     {
         for (const TPair<UField*, UField*>& Mapping : TypeMappings)
@@ -499,6 +570,10 @@ public:
         }
         if (Actor && Actor->GetLevel())
         {
+            if (Actor->IsPackageExternal() && !Actor->GetLevel()->Actors.Contains(Actor))
+            {
+                Actor->GetLevel()->AddLoadedActor(Actor);
+            }
             SceneObjectPaths.Add(Object, Object->GetPathName());
             UClass* DestinationClass = Object->GetClass();
             if (UField* const* Replacement = TypeMappings.Find(DestinationClass))
@@ -953,7 +1028,7 @@ public:
             }
             Archetype = ParentArchetype;
         }
-        if (SourceComponentNode)
+        if (SourceComponentNode && Object->IsTemplate())
         {
             // SCS stores the hierarchy separately; its template fields must not erase constructor attachments.
             Properties.RemoveAll([](const FMigrationValue& Property)
@@ -978,7 +1053,7 @@ public:
         {
             Value.Kind = EMigrationValueKind::Object;
             Value.Object.Reset(Object->GetObjectPropertyValue(Address));
-            if (bKeepAssetReferencesInBlueprint && Property->IsA<FClassProperty>())
+            if (Property->IsA<FClassProperty>())
             {
                 if (UClass* Class = Cast<UClass>(Value.Object.Get()))
                 {
@@ -1267,7 +1342,6 @@ public:
         if (!Source->IsAsset() && Objects.Contains(Source))
         {
             UClass* Class = Objects.FindChecked(Source).DestinationClass.Get();
-            if (bKeepAssetReferencesInBlueprint)
             {
                 if (UBlueprint* SourceBlueprint = UBlueprint::GetBlueprintFromClass(Source->GetClass()))
                 {
@@ -1343,7 +1417,8 @@ public:
             {
                 if (UClass* Class = Cast<UClass>(Object))
                 {
-                    if (UBlueprint* Blueprint = Cast<UBlueprint>(Class->ClassGeneratedBy))
+                    if (UBlueprint* Blueprint = Cast<UBlueprint>(Class->ClassGeneratedBy);
+                        Blueprint && !Class->HasAnyClassFlags(CLASS_Interface))
                     {
                         Object = Blueprint->GeneratedClass.Get();
                         return;
@@ -1401,7 +1476,12 @@ public:
             UObject* Destination = nullptr;
             if (Value.BlueprintClass)
             {
-                Destination = Value.BlueprintClass->GeneratedClass;
+                UClass* ConfigurationClass = Value.BlueprintClass->GeneratedClass;
+                Destination = ConfigurationClass;
+                if (ConfigurationClass && ConfigurationClass->HasAnyClassFlags(CLASS_Interface))
+                {
+                    Destination = ResolveObject(Value.Object.Get(), Owner);
+                }
             }
             else
             {
@@ -1430,7 +1510,8 @@ public:
         else if (Value.Kind == EMigrationValueKind::SoftObject)
         {
             FSoftObjectPath Path(Value.Text);
-            if (!bKeepAssetReferencesInBlueprint || !Property->IsA<FSoftClassProperty>())
+            const UClass* Class = Cast<UClass>(Path.ResolveObject());
+            if (!Property->IsA<FSoftClassProperty>() || (Class && Class->HasAnyClassFlags(CLASS_Interface)))
             {
                 if (const FSoftObjectPath* Replacement = SoftMappings.Find(Path))
                 {
@@ -1534,6 +1615,9 @@ public:
 };
 
 
+
+
+
 static UActorComponent* ResolveConfigurationComponent(UClass* OwnerClass, UActorComponent* Component)
 {
     if (!OwnerClass || !Component || !OwnerClass->IsChildOf(AActor::StaticClass()))
@@ -1593,7 +1677,7 @@ static TSharedPtr<FJsonObject> SerializeConfigurationValue(const FMigrationValue
 }
 
 bool UNativizationV2Subsystem::CaptureConfigurationTemplates(const TMap<UField*, FName>& TranslatedObjects,
-    const TMap<FString, FString>& MemberNames, bool bKeepAssetReferencesInBlueprint,
+    const TMap<FString, FString>& MemberNames,
     TSharedPtr<FJsonObject>& Result, FString& Error) const
 {
     TMap<UField*, UField*> IdentityMappings;
@@ -1602,7 +1686,7 @@ bool UNativizationV2Subsystem::CaptureConfigurationTemplates(const TMap<UField*,
         IdentityMappings.Add(Field.Key, Field.Key);
     }
     const TMap<UClass*, UClass*> NoReplacements;
-    FMigrationValues Values(IdentityMappings, MemberNames, NoReplacements, bKeepAssetReferencesInBlueprint);
+    FMigrationValues Values(IdentityMappings, MemberNames, NoReplacements);
     Result = MakeShared<FJsonObject>();
     Result->SetNumberField(TEXT("Version"), 1);
     TSharedPtr<FJsonObject> Roots = MakeShared<FJsonObject>();
@@ -2063,16 +2147,13 @@ static bool HydrateConfigurationTemplates(const TSharedPtr<FJsonObject>& Configu
 }
 
 bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>& TypeMappings,
-    const TMap<FString, FString>& MemberNames, FString& Error, bool bPreviewOnly,
-    const TMap<UClass*, UClass*>& DefaultOnlyClassReplacements, bool bContinueOnError, bool bKeepAssetReferencesInBlueprint,
+    const TMap<FString, FString>& SourceMemberNames, FString& Error, bool bPreviewOnly,
+    const TMap<UClass*, UClass*>& DefaultOnlyClassReplacements, bool bContinueOnError,
     const TSharedPtr<FJsonObject>& ConfigurationTemplates)
 {
-    if (!bKeepAssetReferencesInBlueprint)
-    {
-        Error = TEXT("Native asset defaults are no longer supported. Regenerate with serialized Blueprint overrides before migration.");
-        return false;
-    }
-    FMigrationValues Values(TypeMappings, MemberNames, DefaultOnlyClassReplacements, bKeepAssetReferencesInBlueprint);
+    TMap<FString, FString> MemberNames(SourceMemberNames);
+
+    FMigrationValues Values(TypeMappings, MemberNames, DefaultOnlyClassReplacements);
     TMap<FString, UObject*> ConfigurationRoots;
     TMap<FString, FString> ConfigurationPropertyNames;
     TMap<FString, FString> ConfigurationMemberNames;
@@ -2095,6 +2176,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     TArray<FMigrationBlueprint> Blueprints;
     TArray<FMigrationTable> Tables;
     TArray<FMigrationInstance> Instances;
+    FMigrationComponentDataLifetime ComponentDataLifetime(Instances);
     TArray<FMigrationInstance> EmbeddedObjects;
     TArray<FMigrationWidget> Widgets;
     TMap<UField*, UField*> ReferenceMappings(TypeMappings);
@@ -2186,7 +2268,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                     }
                 }
             }
-            if (bKeepAssetReferencesInBlueprint)
             {
                 for (UClass* TemplateOwnerClass = SourceClass; TemplateOwnerClass; TemplateOwnerClass = TemplateOwnerClass->GetSuperClass())
                 {
@@ -2605,6 +2686,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     }
 
     FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    Registry.Get().SearchAllAssets(true);
     TArray<FName> Packages;
     for (const TPair<UField*, UField*>& Mapping : ReferenceMappings)
     {
@@ -2631,8 +2713,11 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         }
     }
     TArray<TStrongObjectPtr<UObject>> LoadedAssets;
-    for (const FAssetData& Asset : Assets)
+    TSet<UObject*> CapturedInstanceObjects;
+    int32 ExternalActorCount = 0;
+    for (int32 AssetIndex = 0; AssetIndex < Assets.Num(); ++AssetIndex)
     {
+        const FAssetData Asset = Assets[AssetIndex];
         FString Filename;
         if (!FPackageName::TryConvertLongPackageNameToFilename(Asset.PackageName.ToString(), Filename) ||
             !FPaths::IsUnderDirectory(FPaths::ConvertRelativePathToFull(Filename), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir())))
@@ -2651,6 +2736,33 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
             continue;
         }
         LoadedAssets.Emplace(Object);
+        FlushAsyncLoading();
+        if (UWorld* World = Cast<UWorld>(Object))
+        {
+            TArray<ULevel*> Levels = World->GetLevels();
+            Levels.AddUnique(World->PersistentLevel);
+            for (ULevel* Level : Levels)
+            {
+                if (ULevelScriptBlueprint* LevelBlueprint = Level->GetLevelScriptBlueprint(false))
+                {
+                    Assets.Add(FAssetData(LevelBlueprint));
+                }
+            }
+        }
+        if (AActor* Actor = Cast<AActor>(Object))
+        {
+            if (Actor->IsPackageExternal() && Actor->GetLevel() && !Actor->GetLevel()->Actors.Contains(Actor))
+            {
+                const TArray<UActorComponent*> UnmatchedComponents = FBlueprintComponentRepair::FindUnmatchedConstructionComponents(Actor);
+                if (!UnmatchedComponents.IsEmpty())
+                {
+                    Error = TEXT("Migration preflight found an unmatched SCS component in an external actor. Repair its source map before migration: ") +
+                        UnmatchedComponents[0]->GetPathName();
+                    return false;
+                }
+                Actor->GetLevel()->AddLoadedActor(Actor);
+            }
+        }
         if (Object->IsA<UBlueprint>())
         {
             TArray<UObject*> Subobjects;
@@ -2689,6 +2801,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 }
             }
         }
+        bool bUnresolvedConstructionComponent = false;
         auto CaptureAssetValues = [&]() -> bool
         {
             if (UBlueprint* Blueprint = Cast<UBlueprint>(Object))
@@ -2751,9 +2864,13 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
             {
                 TArray<UObject*> Subobjects;
                 GetObjectsWithOuter(Object, Subobjects, EGetObjectsFlags::IncludeNestedObjects);
+                if (Object->IsA<AActor>())
+                {
+                    Subobjects.Insert(Object, 0);
+                }
                 for (UObject* Subobject : Subobjects)
                 {
-                    if (!IsValid(Subobject))
+                    if (!IsValid(Subobject) || CapturedInstanceObjects.Contains(Subobject))
                     {
                         continue;
                     }
@@ -2802,6 +2919,14 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                         }
                         if (AActor* Actor = Cast<AActor>(Subobject))
                         {
+                            const TArray<UActorComponent*> UnmatchedComponents = FBlueprintComponentRepair::FindUnmatchedConstructionComponents(Actor);
+                            if (!UnmatchedComponents.IsEmpty())
+                            {
+                                bUnresolvedConstructionComponent = true;
+                                Error = FString::Format(TEXT("Migration preflight found an SCS component without a current node, member or template: {0}. Open its source map, run Analyze Blueprint Code and TryFix, then regenerate the export and migration cache. No assets were migrated. The component was not converted into an instance component."),
+                                    {UnmatchedComponents[0]->GetPathName()});
+                                return false;
+                            }
                             FMigrationInstance Instance;
                             Instance.Path = Subobject->GetPathName();
                             Instance.Source.Reset(Subobject);
@@ -2832,9 +2957,14 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                                 ChildActor = ParentActor;
                             }
                             Instances.Add(MoveTemp(Instance));
+                            CapturedInstanceObjects.Add(Actor);
+                            if (Actor->IsPackageExternal())
+                            {
+                                ++ExternalActorCount;
+                            }
                             for (UActorComponent* Component : Actor->GetComponents())
                             {
-                                if (IsValid(Component) && !Component->IsBeingDestroyed() && !Component->IsVisualizationComponent() && !IsMigrationRecoveryRoot(Component))
+                                if (IsValid(Component) && !CapturedInstanceObjects.Contains(Component) && !Component->IsBeingDestroyed() && !Component->IsVisualizationComponent() && !IsMigrationRecoveryRoot(Component))
                                 {
                                     Values.CaptureObject(Component);
                                     FMigrationInstance ComponentInstance;
@@ -2867,6 +2997,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                                             break;
                                         }
                                     }
+                                    ComponentInstance.bRetainedInstanceComponent = Actor->GetInstanceComponents().Contains(Component);
                                     if (Values.Objects.FindChecked(Component).DestinationClass.Get() == Component->GetClass())
                                     {
                                         ComponentInstance.ComponentData = Component->GetComponentInstanceData();
@@ -2911,6 +3042,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                                         }
                                     }
                                     Instances.Add(MoveTemp(ComponentInstance));
+                                    CapturedInstanceObjects.Add(Component);
                                 }
                             }
                         }
@@ -2940,6 +3072,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                                     }
                                 }
                                 Instances.Add(MoveTemp(Instance));
+                                CapturedInstanceObjects.Add(Subobject);
                             }
                             else
                             {
@@ -2970,13 +3103,14 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         };
         if (!CaptureAssetValues())
         {
-            if (!bContinueOnError)
+            if (bUnresolvedConstructionComponent || !bContinueOnError)
             {
                 return false;
             }
             RecordMigrationFailure(Asset.GetSoftObjectPath().ToString(), TEXT("Asset preflight values"), Error);
         }
     }
+    UE_LOG(LogTemp, Display, TEXT("Migration preflight captured %d external actor instances."), ExternalActorCount);
     for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
     {
         if (Blueprint->Status != BS_Error)
@@ -3222,9 +3356,44 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         }
         return true;
     }
+    FBlueprintPropertyBindingMigration PropertyBindingMigration;
+    for (const TStrongObjectPtr<UObject>& Asset : LoadedAssets)
+    {
+        PropertyBindingMigration.Capture(Asset.Get(), MemberNames);
+    }
+    TArray<FCoreRedirect> PropertyBindingRedirects;
+    for (const TPair<UField*, UField*>& Mapping : TypeMappings)
+    {
+        UStruct* OriginalStructure = Cast<UStruct>(Mapping.Key);
+        UStruct* NativeStructure = Cast<UStruct>(Mapping.Value);
+        if (!OriginalStructure || !NativeStructure)
+        {
+            continue;
+        }
+        for (TFieldIterator<FProperty> Property(OriginalStructure, EFieldIteratorFlags::ExcludeSuper); Property; ++Property)
+        {
+            const FString* NativeName = MemberNames.Find(Property->GetPathName());
+            if (!NativeName || *NativeName == Property->GetName() || !FindFProperty<FProperty>(NativeStructure, **NativeName))
+            {
+                continue;
+            }
+            const FString PropertyOwner = NativeStructure->GetPathName() + TEXT(".");
+            PropertyBindingRedirects.Emplace(ECoreRedirectFlags::Type_Property,
+                PropertyOwner + Property->GetName(), PropertyOwner + *NativeName);
+            PropertyBindingRedirects.Emplace(ECoreRedirectFlags::Type_Property,
+                OriginalStructure->GetPathName() + TEXT(".") + Property->GetName(),
+                OriginalStructure->GetPathName() + TEXT(".") + *NativeName);
+            UE_LOG(LogTemp, Verbose, TEXT("Migration property binding redirect: %s -> %s"),
+                *Property->GetPathName(), *(PropertyOwner + *NativeName));
+        }
+    }
+    FCoreRedirects::AddRedirectList(PropertyBindingRedirects, TEXT("BlueprintMigrationPropertyBindings"));
+    ON_SCOPE_EXIT
+    {
+        FCoreRedirects::RemoveRedirectList(PropertyBindingRedirects, TEXT("BlueprintMigrationPropertyBindings"));
+    };
     Values.bCaptureObjectPaths = false;
     FBlueprintSubsystemReinstanceScope SubsystemReinstanceScope;
-    if (bKeepAssetReferencesInBlueprint)
     {
         for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
         {
@@ -3286,6 +3455,87 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                     Values.Objects.FindChecked(OriginalDefault).Properties.Add(MoveTemp(DependencyValue));
                 }
                 ChangedBlueprints.AddUnique(Blueprint.Get());
+            }
+        }
+    }
+
+    for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
+    {
+        if (ConvertedBlueprints.Contains(Blueprint.Get()))
+        {
+            continue;
+        }
+        TArray<UK2Node_CustomEvent*> CustomEvents;
+        FBlueprintEditorUtils::GetAllNodesOfClass(Blueprint.Get(), CustomEvents);
+        for (UK2Node_CustomEvent* CustomEvent : CustomEvents)
+        {
+            UEdGraphPin* DelegateOutput = CustomEvent->FindPin(TEXT("OutputDelegate"), EGPD_Output);
+            if (!DelegateOutput)
+            {
+                continue;
+            }
+            for (UEdGraphPin* LinkedPin : DelegateOutput->LinkedTo)
+            {
+                UK2Node_BaseMCDelegate* Binding = Cast<UK2Node_BaseMCDelegate>(LinkedPin->GetOwningNode());
+                FMulticastDelegateProperty* SourceProperty = nullptr;
+                if (Binding)
+                {
+                    SourceProperty = CastField<FMulticastDelegateProperty>(Binding->GetProperty());
+                }
+                if (!SourceProperty)
+                {
+                    continue;
+                }
+                UClass* NativeOwner = Cast<UClass>(ReferenceMappings.FindRef(SourceProperty->GetOwnerClass()));
+                if (!NativeOwner && TypeMappings.FindKey(SourceProperty->GetOwnerClass()))
+                {
+                    NativeOwner = SourceProperty->GetOwnerClass();
+                }
+                if (!NativeOwner)
+                {
+                    continue;
+                }
+                FProperty* NamingProperty = SourceProperty;
+                if (UBlueprint* SourceBlueprint = Cast<UBlueprint>(SourceProperty->GetOwnerClass()->ClassGeneratedBy))
+                {
+                    if (FProperty* GeneratedProperty = FindFProperty<FProperty>(SourceBlueprint->GeneratedClass.Get(), SourceProperty->GetFName()))
+                    {
+                        NamingProperty = GeneratedProperty;
+                    }
+                }
+                FMulticastDelegateProperty* NativeProperty = FindFProperty<FMulticastDelegateProperty>(NativeOwner,
+                    FName(*Values.GetMemberName(NamingProperty)));
+                if (!NativeProperty)
+                {
+                    continue;
+                }
+                int32 ParameterIndex = 0;
+                for (TFieldIterator<FProperty> Parameter(NativeProperty->SignatureFunction); Parameter && Parameter->HasAnyPropertyFlags(CPF_Parm); ++Parameter)
+                {
+                    if (Parameter->HasAnyPropertyFlags(CPF_ReturnParm))
+                    {
+                        continue;
+                    }
+                    if (!CustomEvent->UserDefinedPins.IsValidIndex(ParameterIndex))
+                    {
+                        break;
+                    }
+                    const FName SourceName = CustomEvent->UserDefinedPins[ParameterIndex++]->PinName;
+                    for (UClass* SignatureOwner : {Blueprint->SkeletonGeneratedClass.Get(), Blueprint->GeneratedClass.Get()})
+                    {
+                        UFunction* Signature = SignatureOwner->FindFunctionByName(CustomEvent->CustomFunctionName);
+                        if (Signature)
+                        {
+                            if (FProperty* SourceParameter = FindFProperty<FProperty>(Signature, SourceName))
+                            {
+                                MemberNames.Add(SourceParameter->GetPathName(), Parameter->GetName());
+                                UE_LOG(LogTemp, Display, TEXT("%s"), *FString::Format(
+                                    TEXT("Migration delegate parameter: {0} -> {1}"), {SourceParameter->GetPathName(), Parameter->GetName()}));
+                            }
+                        }
+                    }
+                }
+                break;
             }
         }
     }
@@ -3391,6 +3641,14 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                         {
                             UserPin->PinDefaultValue = Values.RemapEnumValue(
                                 Cast<UEnum>(UserPin->PinType.PinSubCategoryObject.Get()), UserPin->PinDefaultValue);
+                            if (UField* Replacement = TypeMappings.FindRef(Cast<UField>(UserPin->PinType.PinSubCategoryObject.Get())))
+                            {
+                                UserPin->PinType.PinSubCategoryObject = Replacement;
+                            }
+                            if (UField* Replacement = TypeMappings.FindRef(Cast<UField>(UserPin->PinType.PinValueType.TerminalSubCategoryObject.Get())))
+                            {
+                                UserPin->PinType.PinValueType.TerminalSubCategoryObject = Replacement;
+                            }
                         }
                     }
                     if (UK2Node_SwitchEnum* Switch = Cast<UK2Node_SwitchEnum>(Node))
@@ -3436,6 +3694,10 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                     else if (OriginalEvent)
                     {
                         OriginalFunction = OriginalEvent->EventReference.ResolveMember<UFunction>(Blueprint->SkeletonGeneratedClass.Get());
+                        if (UK2Node_CustomEvent* CustomEvent = Cast<UK2Node_CustomEvent>(OriginalEvent))
+                        {
+                            OriginalFunction = UBlueprintNativizationLibrary::FindFunctionByFunctionName(Blueprint, CustomEvent->CustomFunctionName);
+                        }
                         SignatureMember = &OriginalEvent->EventReference;
                     }
                     else if (OriginalTerminator)
@@ -3463,7 +3725,19 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                             }
                         }
                     }
+                    UFunction* DeclaredFunction = OriginalFunction;
                     OriginalFunction = Values.FindSourceFunction(OriginalFunction);
+                    if (!OriginalFunction && DeclaredFunction)
+                    {
+                        for (TFieldIterator<FProperty> Parameter(DeclaredFunction); Parameter && Parameter->HasAnyPropertyFlags(CPF_Parm); ++Parameter)
+                        {
+                            if (MemberNames.Contains(Parameter->GetPathName()))
+                            {
+                                OriginalFunction = DeclaredFunction;
+                                break;
+                            }
+                        }
+                    }
                     if (!OriginalFunction && SignatureMember && !SignatureMember->GetMemberName().IsNone())
                     {
                         UClass* SourceOwner = SignatureMember->GetMemberParentClass();
@@ -3781,7 +4055,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                                 }
                             }
                         }
-                        if (OriginalFunction && TypeMappings.Contains(OriginalFunction->GetOwnerClass()))
+                        if (OriginalFunction)
                         {
                             if (FProperty* Parameter = FindFProperty<FProperty>(OriginalFunction, Pin->PinName))
                             {
@@ -4283,12 +4557,12 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     for (const TPair<UField*, UField*>& Mapping : ReferenceMappings)
     {
         UBlueprintNativizationLibrary::ReplaceReferencesToType(Mapping.Key, Mapping.Value, ChangedBlueprints, true,
-            !bKeepAssetReferencesInBlueprint && !DefaultOnlySourceClasses.Contains(Cast<UClass>(Mapping.Key)));
+            false);
     }
 
     for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
     {
-        FMigrationReferenceArchive Archive(Blueprint.Get(), Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses, bKeepAssetReferencesInBlueprint);
+        FMigrationReferenceArchive Archive(Blueprint.Get(), Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses);
         if (Archive.GetCount() > 0 || Archive.bSoftReferencesChanged)
         {
             ChangedBlueprints.AddUnique(Blueprint.Get());
@@ -4315,18 +4589,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
             if (Structure->Status != EUserDefinedStructureStatus::UDSS_UpToDate)
             {
                 Error = TEXT("Retained structure failed to compile: ") + Structure->GetPathName();
-                return false;
-            }
-            if (!Values.ApplyStructure(Structure, const_cast<uint8*>(Structure->GetDefaultInstance()), Snapshot.Defaults, Structure))
-            {
-                Error = Values.Error;
-                return false;
-            }
-            CastChecked<UUserDefinedStructEditorData>(Structure->EditorData)->RefreshValuesFromDefaultInstance();
-            FStructureEditorUtils::OnStructureChanged(Structure, FStructureEditorUtils::DefaultValueChanged);
-            if (Structure->Status != EUserDefinedStructureStatus::UDSS_UpToDate)
-            {
-                Error = TEXT("Retained structure defaults failed to compile: ") + Structure->GetPathName();
                 return false;
             }
             for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
@@ -4397,9 +4659,56 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     }
     UE_LOG(LogTemp, Display, TEXT("Compiling the prepared migration batch: %d converted Blueprints."), Blueprints.Num());
     FlushMigrationComponentUpdates();
-    FBlueprintCompilationManager::FlushCompilationQueueAndReinstance(true);
+    // Typed migration restores CDO references after retained structure defaults and instances.
+    // Eager replacement can bind an obsolete REINST class to a CDO with a different layout.
+    FBlueprintCompilationManager::FlushCompilationQueueAndReinstance();
     // Reference replacement also visits the world's native component update queues.
     FlushMigrationComponentUpdates();
+    for (const FMigrationRetainedStructure& Snapshot : RetainedStructures)
+    {
+        UUserDefinedStruct* Structure = Snapshot.Structure.Get();
+        // Configuration classes must acquire their native parents before class defaults are imported.
+        if (!Values.ApplyStructure(Structure, const_cast<uint8*>(Structure->GetDefaultInstance()), Snapshot.Defaults, Structure))
+        {
+            Error = Values.Error;
+            if (!bContinueOnError)
+            {
+                return false;
+            }
+            RecordMigrationFailure(Structure->GetPathName(), TEXT("Retained structure defaults"), Error);
+            continue;
+        }
+        CastChecked<UUserDefinedStructEditorData>(Structure->EditorData)->RefreshValuesFromDefaultInstance();
+        FStructureEditorUtils::OnStructureChanged(Structure, FStructureEditorUtils::DefaultValueChanged);
+        if (Structure->Status != EUserDefinedStructureStatus::UDSS_UpToDate)
+        {
+            Error = TEXT("Retained structure defaults failed to compile: ") + Structure->GetPathName();
+            if (!bContinueOnError)
+            {
+                return false;
+            }
+            RecordMigrationFailure(Structure->GetPathName(), TEXT("Retained structure defaults"), Error);
+        }
+    }
+    for (UBlueprint* Blueprint : ChangedBlueprints)
+    {
+        if (ConvertedBlueprints.Contains(Blueprint) || Blueprint->Status != BS_Error)
+        {
+            continue;
+        }
+        FBlueprintEditorUtils::ReconstructAllNodes(Blueprint);
+        if (!RestoreGraphConnections(Blueprint, false))
+        {
+            if (!bContinueOnError)
+            {
+                return false;
+            }
+            RecordMigrationFailure(Blueprint->GetPathName(), TEXT("Prepared dependent graph connections"), Error);
+            continue;
+        }
+        FCompilerResultsLog CompilationResults;
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::None, &CompilationResults);
+    }
     for (const FMigrationBlueprint& Snapshot : Blueprints)
     {
         UBlueprint* Blueprint = Snapshot.Blueprint.Get();
@@ -4540,7 +4849,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 continue;
             }
             UClass* TemplateClass = Values.Objects.FindChecked(Template.Value).DestinationClass.Get();
-            if (bKeepAssetReferencesInBlueprint)
             {
                 if (UBlueprint* TemplateBlueprint = UBlueprint::GetBlueprintFromClass(Template.Value->GetClass()))
                 {
@@ -4823,6 +5131,20 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 if (!Destination && !Instance.bConstructionComponent)
                 {
                     Destination = FindObject<UObject>(ResolvedOwner, *Instance.ComponentName.ToString());
+                }
+                if (Instance.bRetainedInstanceComponent && !IsOwnedDestination(Destination))
+                {
+                    if (FindObject<UObject>(Actor, *Instance.ComponentName.ToString()))
+                    {
+                        Error = TEXT("Migration cannot retain an instance component because its name is already occupied: ") + Instance.Path;
+                        return nullptr;
+                    }
+                    UActorComponent* RetainedComponent = NewObject<UActorComponent>(Actor, ExpectedClass,
+                        Instance.ComponentName, RF_Transactional);
+                    Actor->AddInstanceComponent(RetainedComponent);
+                    Actor->AddOwnedComponent(RetainedComponent);
+                    RetainedComponent->OnComponentCreated();
+                    Destination = RetainedComponent;
                 }
                 if (ComponentProperty && IsOwnedDestination(Destination))
                 {
@@ -5109,7 +5431,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                     {
                         Destination = Property->GetObjectPropertyValue_InContainer(DefaultObject);
                         UClass* TemplateClass = Values.Objects.FindChecked(Template.Value).DestinationClass.Get();
-                        if (bKeepAssetReferencesInBlueprint)
                         {
                             if (UBlueprint* TemplateBlueprint = UBlueprint::GetBlueprintFromClass(Template.Value->GetClass()))
                             {
@@ -5153,6 +5474,22 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                     if (Property)
                     {
                         Template = Property->GetObjectPropertyValue_InContainer(DefaultObject);
+                        if (!Template)
+                        {
+                            UBlueprintGeneratedClass* GeneratedClass = CastChecked<UBlueprintGeneratedClass>(Snapshot.Blueprint->GeneratedClass.Get());
+                            Template = StaticFindObjectFast(UActorComponent::StaticClass(), GeneratedClass,
+                                Snapshot.ConstructionTemplateNames.FindChecked(Member));
+                            if (IsValid(Template) && !Template->GetClass()->HasAnyClassFlags(CLASS_NewerVersionExists))
+                            {
+                                Property->SetObjectPropertyValue_InContainer(DefaultObject, Template);
+                                Snapshot.Blueprint->ComponentTemplates.AddUnique(CastChecked<UActorComponent>(Template));
+                                GeneratedClass->ComponentTemplates.AddUnique(CastChecked<UActorComponent>(Template));
+                            }
+                            else
+                            {
+                                Template = nullptr;
+                            }
+                        }
                     }
                     if (!Template)
                     {
@@ -5212,7 +5549,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                         }
                     }
                 }
-                if (bKeepAssetReferencesInBlueprint)
                 {
                     if (const FString* BridgeName = MemberNames.Find(Snapshot.SourceClassPath + TEXT(":LibraryAssetBridge:")))
                     {
@@ -5258,12 +5594,45 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         }
     }
     TMap<UClass*, UObject*> GeneratedAssetDefaults;
-    if (bKeepAssetReferencesInBlueprint)
     {
         for (const FMigrationBlueprint& Snapshot : Blueprints)
         {
             GeneratedAssetDefaults.Add(Snapshot.NativeClass.Get(), Snapshot.Blueprint->GeneratedClass->GetDefaultObject());
         }
+    }
+    auto CopyInheritedBlueprintConfiguration = [&DependentConfigurationParents, &DependentDefaults, &Values,
+        &ConfigurationMembers, &ChangedAssets](UBlueprint* Blueprint)
+    {
+        UBlueprint* ParentBlueprint = DependentConfigurationParents.FindRef(Blueprint);
+        if (!ParentBlueprint || !ParentBlueprint->GeneratedClass || !Blueprint->GeneratedClass)
+        {
+            return;
+        }
+        UObject* DefaultObject = Blueprint->GeneratedClass->GetDefaultObject();
+        UObject* ParentDefaults = ParentBlueprint->GeneratedClass->GetDefaultObject();
+        UObject* Original = DependentDefaults.FindChecked(Blueprint);
+        const TArray<FMigrationValue>& OriginalProperties = Values.Objects.FindChecked(Original).Properties;
+        for (FName Member : ConfigurationMembers)
+        {
+            if (OriginalProperties.ContainsByPredicate([Member](const FMigrationValue& Property)
+            {
+                return Property.Name == Member.ToString();
+            }))
+            {
+                continue;
+            }
+            FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(ParentDefaults->GetClass(), Member);
+            if (Property && DefaultObject->IsA(Property->GetOwnerClass()) &&
+                !Property->Identical_InContainer(DefaultObject, ParentDefaults))
+            {
+                Property->CopyCompleteValue_InContainer(DefaultObject, ParentDefaults);
+                ChangedAssets.Add(Blueprint);
+            }
+        }
+    };
+    for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
+    {
+        CopyInheritedBlueprintConfiguration(Blueprint.Get());
     }
     auto CopyConfiguration = [&ConfigurationMembers, &AssetConfigurationMembers, &GeneratedAssetDefaults](UObject* Object,
         const TArray<FMigrationValue>* OriginalProperties = nullptr) -> bool
@@ -5360,7 +5729,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         }
         return true;
     };
-    if (bKeepAssetReferencesInBlueprint)
     {
         for (const TPair<UObject*, TStrongObjectPtr<UObject>>& Destination : Values.DestinationObjects)
         {
@@ -5432,7 +5800,20 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     }
     for (const FMigrationTable& Snapshot : Tables)
     {
+        if (UCompositeDataTable* Composite = Cast<UCompositeDataTable>(Snapshot.Table.Get()))
+        {
+            Composite->CleanBeforeStructChange();
+            Composite->RowStruct = Snapshot.NativeStructure.Get();
+            ChangedAssets.Add(Composite);
+        }
+    }
+    for (const FMigrationTable& Snapshot : Tables)
+    {
         UDataTable* Table = Snapshot.Table.Get();
+        if (Table->IsA<UCompositeDataTable>())
+        {
+            continue;
+        }
         auto ApplyTableRows = [&]() -> bool
         {
             Table->Modify();
@@ -5460,14 +5841,21 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
             RecordMigrationFailure(Table->GetPathName(), TEXT("Data table rows"), Error);
         }
     }
+    for (const FMigrationTable& Snapshot : Tables)
+    {
+        if (UCompositeDataTable* Composite = Cast<UCompositeDataTable>(Snapshot.Table.Get()))
+        {
+            Composite->RestoreAfterStructChange();
+        }
+    }
     for (const TPair<UField*, UField*>& Mapping : ReferenceMappings)
     {
         UBlueprintNativizationLibrary::ReplaceReferencesToType(Mapping.Key, Mapping.Value, ChangedBlueprints, true,
-            !bKeepAssetReferencesInBlueprint && !DefaultOnlySourceClasses.Contains(Cast<UClass>(Mapping.Key)));
+            false);
     }
     for (const TStrongObjectPtr<UBlueprint>& Blueprint : DependentBlueprints)
     {
-        FMigrationReferenceArchive Archive(Blueprint.Get(), Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses, bKeepAssetReferencesInBlueprint);
+        FMigrationReferenceArchive Archive(Blueprint.Get(), Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses);
         if (Archive.GetCount() > 0 || Archive.bSoftReferencesChanged)
         {
             ChangedBlueprints.AddUnique(Blueprint.Get());
@@ -5508,7 +5896,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 }
             }
             FlushMigrationComponentUpdates();
-            FMigrationReferenceArchive Archive(Object, Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses, bKeepAssetReferencesInBlueprint);
+            FMigrationReferenceArchive Archive(Object, Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses);
             if (Archive.GetCount() > 0 || Archive.bSoftReferencesChanged)
             {
                 ChangedAssets.Add(Object);
@@ -5598,7 +5986,6 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     {
         return false;
     }
-    if (bKeepAssetReferencesInBlueprint)
     {
         for (const FMigrationBlueprint& Snapshot : Blueprints)
         {
@@ -5700,26 +6087,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 CastChecked<UActorComponent>(Destination)->PostApplyToComponent();
             }
         }
-        if (UBlueprint* ParentBlueprint = DependentConfigurationParents.FindRef(Blueprint.Get()))
-        {
-            UObject* ParentDefaults = ParentBlueprint->GeneratedClass->GetDefaultObject();
-            const TArray<FMigrationValue>& OriginalProperties = Values.Objects.FindChecked(Original).Properties;
-            for (FName Member : ConfigurationMembers)
-            {
-                if (OriginalProperties.ContainsByPredicate([Member](const FMigrationValue& Property)
-                {
-                    return Property.Name == Member.ToString();
-                }))
-                {
-                    continue;
-                }
-                FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(ParentDefaults->GetClass(), Member);
-                if (Property && DefaultObject->IsA(Property->GetOwnerClass()))
-                {
-                    Property->CopyCompleteValue_InContainer(DefaultObject, ParentDefaults);
-                }
-            }
-        }
+        CopyInheritedBlueprintConfiguration(Blueprint.Get());
     }
     TSet<UObject*> ConstructionComponents;
     TSet<UObject*> ConstructionOwners;
@@ -5946,6 +6314,17 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         {
             continue;
         }
+        if (Instance.bRetainedInstanceComponent)
+        {
+            UActorComponent* Component = CastChecked<UActorComponent>(Destination);
+            AActor* Owner = Component->GetOwner();
+            Owner->AddInstanceComponent(Component);
+            Owner->AddOwnedComponent(Component);
+            if (Owner->GetWorld() && Owner->IsActorInitialized() && !Component->IsRegistered())
+            {
+                Component->RegisterComponent();
+            }
+        }
         if (Instance.ComponentData.IsValid())
         {
             if (UStaticMeshComponent* StaticMeshComponent = Cast<UStaticMeshComponent>(Destination))
@@ -6008,6 +6387,15 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 UpdatedComponent->PostApplyToComponent();
             }
         }
+        AActor* ExternalActor = Cast<AActor>(Destination);
+        if (UActorComponent* Component = Cast<UActorComponent>(Destination))
+        {
+            ExternalActor = Component->GetOwner();
+        }
+        if (ExternalActor && ExternalActor->IsPackageExternal())
+        {
+            ChangedAssets.Add(ExternalActor);
+        }
         for (const TStrongObjectPtr<UObject>& Asset : LoadedAssets)
         {
             if (Asset && Asset->GetOutermost() == Destination->GetOutermost() && Asset->IsAsset())
@@ -6030,6 +6418,32 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         Error = Values.Error;
         UE_LOG(LogTemp, Error, TEXT("Final migration reference normalization failed: %s"), *Error);
         return false;
+    }
+    for (const TStrongObjectPtr<UObject>& Asset : LoadedAssets)
+    {
+        const int32 UpdatedPaths = PropertyBindingMigration.Apply(Asset.Get());
+        if (UpdatedPaths > 0)
+        {
+            ChangedAssets.Add(Asset.Get());
+            UE_LOG(LogTemp, Display, TEXT("Migration updated %d serialized property binding paths in %s."), UpdatedPaths, *Asset->GetPathName());
+        }
+    }
+    for (TStrongObjectPtr<UObject>& Asset : LoadedAssets)
+    {
+        if (Cast<AActor>(Asset.Get()))
+        {
+            if (AActor* CurrentActor = Cast<AActor>(Values.ObjectMappings.FindRef(Asset.Get())))
+            {
+                if (CurrentActor->IsPackageExternal())
+                {
+                    if (ChangedAssets.Remove(Asset.Get()) > 0)
+                    {
+                        ChangedAssets.Add(CurrentActor);
+                    }
+                    Asset.Reset(CurrentActor);
+                }
+            }
+        }
     }
     for (const FMigrationInstance& Instance : EmbeddedObjects)
     {
@@ -6057,13 +6471,29 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
         {
             continue;
         }
-        FMigrationReferenceArchive Archive(Asset.Get(), Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses, bKeepAssetReferencesInBlueprint);
+        FMigrationReferenceArchive Archive(Asset.Get(), Values.ObjectMappings, Values.SoftMappings, DefaultOnlySourceClasses);
         if (Archive.GetCount() > 0 || Archive.bSoftReferencesChanged)
         {
             ChangedAssets.Add(Asset.Get());
         }
     }
-    UEditorAssetSubsystem* AssetSubsystem = GEditor->GetEditorSubsystem<UEditorAssetSubsystem>();
+    TSet<FName> WorldPackages;
+    for (UObject* Asset : ChangedAssets)
+    {
+        UWorld* World = Cast<UWorld>(Asset);
+        if (!World)
+        {
+            World = Asset->GetTypedOuter<UWorld>();
+        }
+        if (World)
+        {
+            WorldPackages.Add(World->GetOutermost()->GetFName());
+        }
+    }
+    for (FName WorldPackage : WorldPackages)
+    {
+        ULevelInstanceSubsystem::ResetLoadersForWorldAsset(WorldPackage.ToString());
+    }
     TMap<FName, FName> UnsafePackageSources;
     auto UpdateUnsafePackages = [&]()
     {
@@ -6096,6 +6526,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
     UpdateUnsafePackages();
     TArray<FString> SavedAssets;
     TArray<FString> SkippedAssets;
+    TSet<UPackage*> SavedPackages;
     for (UObject* Asset : ChangedAssets)
     {
         if (const FName* FailurePackage = UnsafePackageSources.Find(Asset->GetOutermost()->GetFName()))
@@ -6114,7 +6545,13 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
                 BlueprintClass->UpdateCustomPropertyListForPostConstruction();
             }
         }
-        if (!AssetSubsystem->SaveLoadedAsset(Asset, false))
+        UPackage* Package = Asset->GetPackage();
+        if (SavedPackages.Contains(Package))
+        {
+            continue;
+        }
+        TGuardValue<bool> UnattendedSaveGuard(GIsRunningUnattendedScript, true);
+        if (!UEditorLoadingAndSavingUtils::SavePackages({Package}, false))
         {
             Error = TEXT("Migration failed to save: ") + Asset->GetPathName();
             if (!bContinueOnError)
@@ -6126,6 +6563,7 @@ bool UNativizationV2Subsystem::ApplyMigrationTypes(const TMap<UField*, UField*>&
             UpdateUnsafePackages();
             continue;
         }
+        SavedPackages.Add(Package);
         SavedAssets.Add(Asset->GetPathName());
         if (bContinueOnError)
         {

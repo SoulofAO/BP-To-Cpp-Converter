@@ -7,6 +7,7 @@
 #include "BlueprintNativizationSettings.h"
 #include "NativeApiCatalog.h"
 #include "KismetCompilerMisc.h"
+#include "NativeEventGeneration.h"
 
 FProperty* UBlueprintNativizationLibrary::FindFunctionProperty(UFunction* Function, FName PropertyName, bool bParameter)
 {
@@ -88,6 +89,20 @@ FGenerateResultStruct UBlueprintNativizationLibrary::GenerateVariableAccess(UK2N
         }
     }
     FGenerateResultStruct Result(GetUniquePropertyName(Property));
+    if (Property->HasMetaData(FBlueprintMetadata::MD_PropertyGetFunction))
+    {
+        UFunction* Getter = Property->GetOwnerClass()->FindFunctionByName(FName(*Property->GetMetaData(FBlueprintMetadata::MD_PropertyGetFunction)));
+        FString Receiver = TEXT("this");
+        if (UEdGraphPin* ReceiverPin = Variable->FindPin(UEdGraphSchema_K2::PN_Self);
+            ReceiverPin && (!ReceiverPin->LinkedTo.IsEmpty() || ReceiverPin->DefaultObject))
+        {
+            const FGenerateResultStruct Target = Subsystem->GenerateInputParameterCodeForNode(Variable, ReceiverPin, 0, MacroStack);
+            Result.Preparations.Append(Target.Preparations);
+            Receiver = Target.Code;
+        }
+        Result.Code = FRetainedBlueprintGeneration::CallPropertyAccessor(Property, Getter, Receiver, FString(), false);
+        return Result;
+    }
     if (FRetainedBlueprintGeneration::IsRetained(Property->GetOwnerClass()))
     {
         FString Receiver = TEXT("this");
@@ -204,6 +219,17 @@ FGenerateResultStruct UBlueprintNativizationLibrary::GenerateVariableAccess(UK2N
     {
         FObjectPropertyBase* ObjectProperty = CastFieldChecked<FObjectPropertyBase>(Property);
         Result.Code = TEXT("Cast<") + FRetainedBlueprintGeneration::GetClassName(ObjectProperty->PropertyClass) + TEXT(">(") + Result.Code + TEXT(")");
+    }
+    else if (Subsystem->bRequiresInputStorage && !bUsesGetter && Property->GetOwnerClass() &&
+        !Property->GetOwnerClass()->HasAnyClassFlags(CLASS_Native) &&
+        (Property->IsA<FArrayProperty>() || Property->IsA<FMapProperty>() || Property->IsA<FSetProperty>() || Property->IsA<FStructProperty>()))
+    {
+        UClass* GeneratedClass = Variable->GetBlueprint()->GeneratedClass;
+        UFunction* CurrentFunction = GetFunctionByNodeAndEntryNodes(Variable, Subsystem->EntryNodes);
+        if (CurrentFunction && FNativeEventGeneration::IsImplementationConst(CurrentFunction, GeneratedClass))
+        {
+            Result.Code = TEXT("const_cast<") + FRetainedBlueprintGeneration::GetClassName(GeneratedClass) + TEXT("*>(this)->") + Result.Code;
+        }
     }
     return Result;
 }

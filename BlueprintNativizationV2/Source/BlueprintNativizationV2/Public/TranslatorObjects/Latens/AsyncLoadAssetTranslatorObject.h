@@ -16,10 +16,6 @@ class BLUEPRINTNATIVIZATIONV2_API UAsyncLoadAssetTranslatorObject : public UTran
 	GENERATED_BODY()
 public:
 
-    virtual bool ShouldExpandNode(UK2Node* Node) const override
-    {
-        return true;
-    }
 
     UAsyncLoadAssetTranslatorObject()
     {
@@ -27,6 +23,10 @@ public:
         NodeNamesForCheck = { };
     }
 
+    virtual TSet<FString> GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override;
+    virtual FString GenerateGlobalVariables(UK2Node* Node, FString Prefix, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateLocalVariables(UK2Node* Node, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override { return {}; }
+    virtual bool ShouldPrepareInputs(UK2Node* Node, const FString& EntryPinName) const override { return false; }
     virtual void GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path, TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* NativizationV2Subsystem) override;
 
 	virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* NativizationV2Subsystem) override;

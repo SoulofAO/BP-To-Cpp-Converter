@@ -19,7 +19,7 @@ FGenerateResultStruct UMakeArrayTranslatorObject::GenerateInputParameterCodeForN
 
 		for (UEdGraphPin* ElementPin : MakeArrayNode->Pins)
 		{
-			if (ElementPin->Direction == EGPD_Input)
+			if (ElementPin->Direction == EGPD_Input && !ElementPin->ParentPin && !ElementPin->bOrphanedPin)
 			{
 				FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeArrayNode, ElementPin, 0, MacroStack);
 

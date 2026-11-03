@@ -55,6 +55,11 @@ FString UComponentEventTranslatorObject::GenerateConstruction(UK2Node* InputNode
             return FString();
         }
         FString PropertyName = UBlueprintNativizationLibrary::GetUniquePropertyName(ComponentProperty);
+        FString ComponentInclude;
+        if (NativizationV2Subsystem->GetIncludeFromField(ComponentProperty->PropertyClass, ComponentInclude))
+        {
+            FNativeGenerationContext::AddImplementationInclude(ComponentInclude);
+        }
         FGetterAndSetterPropertyDescriptor Descriptor;
         if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(ComponentProperty, Descriptor) &&
             !Descriptor.GetterPropertyFunctionName.IsEmpty())

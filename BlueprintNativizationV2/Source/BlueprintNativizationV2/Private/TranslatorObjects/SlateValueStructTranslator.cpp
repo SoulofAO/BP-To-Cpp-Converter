@@ -191,11 +191,7 @@ bool USlateValueStructTranslator::Translate(const FStructTranslationRequest& Req
     {
         auto* Resource = FindFProperty<FObjectPropertyBase>(Request.Structure, TEXT("ResourceObject"));
         const FString Expression = FStructInitialization::PropertyExpression(Resource, Resource->ContainerPtrToValuePtr<void>(Source), Request);
-        if (Expression == TEXT("nullptr") && !Request.bKeepAssetReferencesInBlueprint)
-        {
-            Result.Error = TEXT("Brush resource cannot be represented as a native object expression.");
-            return false;
-        }
+
         Result.Preparations.Add(Name + TEXT(".SetResourceObject(") + Expression + TEXT(");"));
     }
     Result.Expression = Name;

@@ -12,14 +12,19 @@ FGenerateResultStruct USelectTranslatorObject::GenerateInputParameterCodeForNode
     TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
 {
     UK2Node_Select* Select = CastChecked<UK2Node_Select>(Node);
-    const FString ValueType = UBlueprintNativizationLibrary::GetPinType(Pin->PinType, false);
+    const FString ValueType = UBlueprintNativizationLibrary::GetPinType(Select->GetReturnValuePin()->PinType, false);
     const FGenerateResultStruct Index = Subsystem->GenerateInputParameterCodeForNode(Node, Select->GetIndexPin(), 0, MacroStack);
     const FString IndexName = Subsystem->GetNodeStateName(Node, TEXT("SelectIndex"));
-    const FString ResultName = Subsystem->GetNodeStateName(Node, TEXT("SelectedValue"), true);
+    const FString ResultName = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(
+        Node->GetBlueprint()->GeneratedClass, TEXT("SelectedValue"));
     FString Content = FString::Format(TEXT("{0} {1}{};\n{\nconst auto {2} = {3};\n"),
         { ValueType, ResultName, IndexName, Index.Code });
     TArray<UEdGraphPin*> Options;
     Select->GetOptionPins(Options);
+    Options.RemoveAll([](const UEdGraphPin* Option)
+    {
+        return Option->ParentPin || Option->bOrphanedPin;
+    });
     FGenerationPreparations EmittedPreparations = Index.Preparations;
     TArray<FString> OptionNames;
     for (int32 OptionIndex = 0; OptionIndex < Options.Num(); ++OptionIndex)

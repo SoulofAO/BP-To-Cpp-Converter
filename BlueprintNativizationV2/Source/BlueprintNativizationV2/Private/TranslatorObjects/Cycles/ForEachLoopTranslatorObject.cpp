@@ -11,6 +11,7 @@
 FGenerateResultStruct UForEachLoopTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex,
     TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
 {
+    Pin = UBlueprintNativizationLibrary::GetParentPin(Pin);
     if (Pin->PinName != TEXT("Array Element"))
     {
         return UBlueprintNativizationLibrary::GetUniquePinName(Pin, Subsystem->EntryNodes);
@@ -44,7 +45,7 @@ FString UForEachLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStrin
     FGenerateResultStruct Array;
     {
         TGuardValue<FString> EvaluationScope(Subsystem->InputEvaluationPurpose, TEXT("LoopCondition"));
-        TGuardValue<TMap<UK2Node*, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<UK2Node*, FGenerateResultStruct>());
+        TGuardValue<TMap<FString, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<FString, FGenerateResultStruct>());
         Array = Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Array")), 0, MacroStack);
     }
     FString Length = FString::Format(TEXT("({0}).Num()"), { Array.Code });

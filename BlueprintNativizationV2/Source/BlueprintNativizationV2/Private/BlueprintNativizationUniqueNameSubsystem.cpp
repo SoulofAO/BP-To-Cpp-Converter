@@ -4,8 +4,10 @@
  * Copyright AO All Rights Reserved.
  */
 
+#include "EdGraphSchema_K2.h"
 #include "BlueprintNativizationUniqueNameSubsystem.h"
 #include "NativeGenerationContext.h"
+#include "GenerationGraphContext.h"
 #include "NativeModuleCache.h"
 #include "NativeApiCatalog.h"
 #include "Misc/ConfigCacheIni.h"
@@ -34,12 +36,18 @@ FString UBlueprintNativizationUniqueNameSubsystem::SanitizeIdentifier(const FStr
 {
 	FString Result;
 
-	for (TCHAR Char : Input)
+	for (TCHAR Character : Input)
 	{
-		if (FChar::IsAlpha(Char) || FChar::IsDigit(Char) || Char == TEXT('_'))
+		if ((Character >= TEXT('A') && Character <= TEXT('Z')) ||
+            (Character >= TEXT('a') && Character <= TEXT('z')) ||
+            (Character >= TEXT('0') && Character <= TEXT('9')) || Character == TEXT('_'))
 		{
-			Result.AppendChar(Char);
+			Result.AppendChar(Character);
 		}
+        else if (Character > 127)
+        {
+            Result += TEXT("U") + FString::FromInt(static_cast<int32>(Character));
+        }
 	}
 
 	if (!Result.IsEmpty() && !FChar::IsAlpha(Result[0]))
@@ -155,8 +163,47 @@ FString UBlueprintNativizationUniqueNameSubsystem::GetModuleQualifiedFieldName(U
     return BaseName.Left(1) + ModuleName + BaseName.RightChop(1);
 }
 
+static FString GetReflectedFieldName(UField* Field, FString Name)
+{
+    if (const UClass* Class = Cast<UClass>(Field))
+    {
+        if (!Class->HasAnyClassFlags(CLASS_Interface))
+        {
+            Name.RemoveFromStart(Class->GetPrefixCPP());
+        }
+    }
+    else if (Field->IsA<UScriptStruct>())
+    {
+        Name.RemoveFromStart(TEXT("F"));
+    }
+    else if (!Field->IsA<UEnum>())
+    {
+        return FString();
+    }
+    return Name;
+}
+
+bool UBlueprintNativizationUniqueNameSubsystem::IsReflectedFieldNameUsed(UField* Field, const FString& Name) const
+{
+    const FName ReflectedName(*GetReflectedFieldName(Field, Name));
+    if (ReflectedName.IsNone())
+    {
+        return false;
+    }
+    return NativeReflectedFieldNames.Contains(ReflectedName) || UniqueFieldNameArray.ContainsByPredicate(
+        [Field, ReflectedName](const FRegisterNameField& Registered)
+        {
+            return Registered.Field != Field && FName(*GetReflectedFieldName(Registered.Field, Registered.Name.ToString())) == ReflectedName;
+        });
+}
+
 FString UBlueprintNativizationUniqueNameSubsystem::GetSourceNameConflict(UField* Field, const FString& Name) const
 {
+    const FString ReflectedName = GetReflectedFieldName(Field, Name);
+    if (!ReflectedName.IsEmpty() && NativeReflectedFieldNames.Contains(FName(*ReflectedName)))
+    {
+        return TEXT("Reflected type name is already used by a native type: ") + ReflectedName;
+    }
     const UClass* Class = Cast<UClass>(Field);
     if (Class && Class->HasAnyClassFlags(CLASS_Interface))
     {
@@ -218,7 +265,8 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFieldName(UField* Fiel
 
     if (const FName* PreviousName = PreviousFieldNames.Find(UBlueprintNativizationLibrary::GetStableFieldIdentifier(Field)))
     {
-        bool bPreviousNameAvailable = GetSourceNameConflict(Field, PreviousName->ToString()).IsEmpty() && !NativeFieldNames.Contains(*PreviousName);
+        bool bPreviousNameAvailable = GetSourceNameConflict(Field, PreviousName->ToString()).IsEmpty() && !NativeFieldNames.Contains(*PreviousName) &&
+            !IsReflectedFieldNameUsed(Field, PreviousName->ToString());
         if (const UClass* Class = Cast<UClass>(Field); Class && Class->HasAnyClassFlags(CLASS_Interface))
         {
             bPreviousNameAvailable = bPreviousNameAvailable && !IsFieldNameUsed(FName(*(TEXT("U") + PreviousName->ToString()))) &&
@@ -251,6 +299,10 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFieldName(UField* Fiel
             NewNameString += FString::FromInt(Counter);
         }
 		Counter++;
+        if (IsReflectedFieldNameUsed(Field, NewNameString))
+        {
+            continue;
+        }
 		if (Cast<UClass>(Field) && (Cast<UClass>(Field)->IsChildOf<UInterface>() || Cast<UClass>(Field)->HasAnyClassFlags(CLASS_Interface)))
 		{
 			if (!IsFieldNameUsed(FName(*(TEXT("U") + NewNameString))) && !IsFieldNameUsed(FName(*(TEXT("I") + NewNameString))))
@@ -278,6 +330,7 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFieldName(UField* Fiel
 void UBlueprintNativizationUniqueNameSubsystem::BeginNameLookup()
 {
     NativeFieldNames.Reset();
+    NativeReflectedFieldNames.Reset();
     SourceNameConflicts.Reset();
     PreviousFieldNames.Reset();
     const FString ModuleName = GetDefault<UBlueprintNativizationV2EditorSettings>()->ModuleName;
@@ -373,6 +426,10 @@ void UBlueprintNativizationUniqueNameSubsystem::BeginNameLookup()
                 continue;
             }
             NativeFieldNames.Add(FName(*GetDefaultBaseName(*FieldIterator)));
+            if (FieldIterator->IsA<UClass>() || FieldIterator->IsA<UScriptStruct>() || FieldIterator->IsA<UEnum>())
+            {
+                NativeReflectedFieldNames.Add(FieldIterator->GetFName());
+            }
 
             if (FieldIterator->IsA<UScriptStruct>())
             {
@@ -387,6 +444,7 @@ void UBlueprintNativizationUniqueNameSubsystem::EndNameLookup()
 {
     bNameLookupActive = false;
     NativeFieldNames.Reset();
+    NativeReflectedFieldNames.Reset();
     SourceNameConflicts.Reset();
     PreviousFieldNames.Reset();
 }
@@ -504,6 +562,19 @@ TArray<FName> UBlueprintNativizationUniqueNameSubsystem::GetAllClassGlobalProper
 		return Names;
 	}
 
+    for (UClass* Layer = Class; Layer; Layer = Layer->GetSuperClass())
+    {
+        if (Layer->IsNative())
+        {
+            if (const TSharedPtr<FJsonObject> Type = FNativeApiCatalog::FindType(Layer))
+            {
+                for (const TSharedPtr<FJsonValue>& Member : Type->GetArrayField(TEXT("Members")))
+                {
+                    Names.Add(FName(*Member->AsObject()->GetStringField(TEXT("Name"))));
+                }
+            }
+        }
+    }
 	for (TFieldIterator<FProperty> PropIt(Class, EFieldIteratorFlags::IncludeSuper); PropIt; ++PropIt)
 	{
 		FProperty* Property = *PropIt;
@@ -573,8 +644,20 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName_Internal(
         UniqueFunctionNameArray.FindByKey(Class)->NodeNamePairs.Add({EntryNode, InheritedName});
         return InheritedName;
     }
-	BaseFunctionName = SanitizeIdentifier(BaseFunctionName);
-	int& Counter = ExistingFunctionEntry->UniqueFunctionCounter.FindOrAdd(*BaseFunctionName);
+    TArray<FName> ReservedFunctionNames = GetAllFunctionNames(Class->GetSuperClass());
+    for (UClass* Layer = Class.Get(); Layer; Layer = Layer->GetSuperClass())
+    {
+        for (const FImplementedInterface& ImplementedInterface : Layer->Interfaces)
+        {
+            for (TFieldIterator<UFunction> InterfaceFunction(ImplementedInterface.Class); InterfaceFunction; ++InterfaceFunction)
+            {
+                ReservedFunctionNames.AddUnique(GetUniqueFunctionName(*InterfaceFunction, InterfaceFunction->GetName()));
+            }
+        }
+    }
+    ExistingFunctionEntry = UniqueFunctionNameArray.FindByKey(Class);
+    BaseFunctionName = SanitizeIdentifier(BaseFunctionName);
+    int& Counter = ExistingFunctionEntry->UniqueFunctionCounter.FindOrAdd(*BaseFunctionName);
 
 	FString UniqueNameString;
 	while (true)
@@ -598,7 +681,7 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName_Internal(
 		Counter++;
 
 		if (!IsFieldNameUsed(FName(*UniqueNameString)) &&
-            !GetAllFunctionNames(Class->GetSuperClass()).Contains(FName(*UniqueNameString)))
+            !ReservedFunctionNames.Contains(FName(*UniqueNameString)))
 		{
 			break;
 		}
@@ -608,19 +691,6 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName_Internal(
 	ExistingFunctionEntry->NodeNamePairs.Add({ EntryNode, UniqueFunctionName });
 
 	return UniqueFunctionName;
-}
-
-void UBlueprintNativizationUniqueNameSubsystem::RegisterFunctionAlias(UK2Node* OriginalNode, UK2Node* ExpandedNode)
-{
-    FRegisterNameFunction* Functions = UniqueFunctionNameArray.FindByKey(OriginalNode->GetBlueprint()->GeneratedClass);
-    if (Functions)
-    {
-        if (const FNodeNamePair* Original = Functions->NodeNamePairs.FindByKey(OriginalNode))
-        {
-            const FName Name = Original->Name;
-            Functions->NodeNamePairs.Add({ ExpandedNode, Name });
-        }
-    }
 }
 
 FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName(UFunction* Function, FString PredictName)
@@ -636,7 +706,16 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueFunctionName(UFunction
 			Function->GetFName())
 	);
 
-	FName OriginalName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EntryNode);
+    if (!EntryNode)
+    {
+        if (UFunction* ParentFunction = Function->GetSuperFunction())
+        {
+            return GetUniqueFunctionName(ParentFunction, PredictName);
+        }
+        FNativeApiCatalog::AddError(TEXT("Cannot resolve a generated function entry: ") + Function->GetPathName());
+        return NAME_None;
+    }
+    FName OriginalName = UBlueprintNativizationLibrary::GetEntryFunctionNameByNode(EntryNode);
 	const FString BaseFunctionName = OriginalName.IsNone() ? PredictName : OriginalName.ToString();
 	return GetUniqueFunctionName_Internal(EntryNode, BaseFunctionName);
 }
@@ -690,7 +769,9 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniqueVariableName(FProperty
 		}
 	}
 	
-	if (UBlueprintNativizationLibrary::IsCppDefinedProperty(Property))
+    const UFunction* PropertyFunction = Property->GetOwner<UFunction>();
+	if (UBlueprintNativizationLibrary::IsCppDefinedProperty(Property) &&
+        (!PropertyFunction || !PropertyFunction->HasAnyFunctionFlags(FUNC_Delegate)))
 	{
 		/*
 		FGetterAndSetterPropertyDescriptor OutGetterAndSetterDescriptorDesc;
@@ -926,6 +1007,26 @@ FName UBlueprintNativizationUniqueNameSubsystem::GenerateConstructorLambdaUnique
 }
 
 
+const FPropertyNamePair* UBlueprintNativizationUniqueNameSubsystem::FindPersistentPinVariable(UEdGraphPin* Pin) const
+{
+    for (const FRegisterVariable& Scope : UniqueVarNamesArray)
+    {
+        if (!Scope.Function && !Scope.GeneratedFunctionEntryNode)
+        {
+            if (const FPropertyNamePair* Variable = Scope.PropertyNamePairs.FindByKey(Pin))
+            {
+                return Variable;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool UBlueprintNativizationUniqueNameSubsystem::IsPersistentPinVariable(UEdGraphPin* Pin) const
+{
+    return FindPersistentPinVariable(Pin) != nullptr;
+}
+
 FName UBlueprintNativizationUniqueNameSubsystem::GetUniquePinVariableName(UEdGraphPin* Pin, TArray<FGenerateFunctionStruct> EntryNodes)
 {
 	if (!Pin || !Pin->GetOwningNode() || !Cast<UK2Node>(Pin->GetOwningNode())->GetBlueprint())
@@ -935,6 +1036,10 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniquePinVariableName(UEdGra
 	
 	UBlueprint* Blueprint = Cast<UK2Node>(Pin->GetOwningNode())->GetBlueprint();
 	UClass* OwningClass = Blueprint->GeneratedClass;
+    if (const FPropertyNamePair* Persistent = FindPersistentPinVariable(Pin))
+    {
+        return Persistent->Name;
+    }
 
 	FGenerateFunctionStruct GenerateFunctionStruct;
 	if (!UBlueprintNativizationLibrary::GetEntryByNodeAndEntryNodes(Cast<UK2Node>(Pin->GetOwningNode()), EntryNodes, GenerateFunctionStruct))
@@ -953,7 +1058,21 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniquePinVariableName(UEdGra
         }
     }
 
-	FRegisterVariable* ExistingRegister = UniqueVarNamesArray.FindByKey(FRegisterVariable(OwningClass, OwningFunction, EntryNode, false));
+    UFunction* RegistrationFunction = OwningFunction;
+    UK2Node* RegistrationEntry = EntryNode;
+    if (Pin->Direction == EGPD_Output && Pin->LinkedTo.Num() > 0 && !CastChecked<UK2Node>(Pin->GetOwningNode())->IsNodePure() &&
+        !FGenerationGraphContext::IsFunctionGraph(CastChecked<UK2Node>(Pin->GetOwningNode())) &&
+        !EntryNodes.ContainsByPredicate([Pin](const FGenerateFunctionStruct& Entry)
+        {
+            return Entry.Node == Pin->GetOwningNode();
+        }) &&
+        !Pin->GetOwningNode()->IsA<UK2Node_Event>() && !Pin->GetOwningNode()->IsA<UK2Node_FunctionEntry>() &&
+        !UBlueprintNativizationLibrary::IsPinAllLinkInCurrentFunctionNode(Pin, CastChecked<UK2Node>(Pin->GetOwningNode()), EntryNodes))
+    {
+        RegistrationFunction = nullptr;
+        RegistrationEntry = nullptr;
+    }
+	FRegisterVariable* ExistingRegister = UniqueVarNamesArray.FindByKey(FRegisterVariable(OwningClass, RegistrationFunction, RegistrationEntry, false));
 
 	if (ExistingRegister)
 	{
@@ -965,7 +1084,7 @@ FName UBlueprintNativizationUniqueNameSubsystem::GetUniquePinVariableName(UEdGra
 	}
 	else
 	{
-		FRegisterVariable NewRegister(OwningClass, OwningFunction, EntryNode, false);
+		FRegisterVariable NewRegister(OwningClass, RegistrationFunction, RegistrationEntry, false);
 		UniqueVarNamesArray.Add(NewRegister);
 		ExistingRegister =UniqueVarNamesArray.FindByKey(NewRegister);
 	}
@@ -1045,7 +1164,7 @@ bool UBlueprintNativizationUniqueNameSubsystem::CheckUnquieVarName(FString Check
         for (const FRegisterVariable& Registered : UniqueVarNamesArray)
         {
             if (VariableScope && (VariableScope->Function || VariableScope->GeneratedFunctionEntryNode) &&
-                (Registered.Function || Registered.GeneratedFunctionEntryNode || Registered.IsConstructorVar) &&
+                (Registered.Function || Registered.GeneratedFunctionEntryNode) &&
                 !(Registered == *VariableScope))
             {
                 continue;

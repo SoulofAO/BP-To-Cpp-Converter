@@ -5,9 +5,12 @@
  */
 
 #include "TranslatorObjects/CallFunctionTranslatorObject.h"
+#include "BlueprintNativizationUniqueNameSubsystem.h"
 #include "K2Node_VariableGet.h"
 #include "NativeApiCatalog.h"
 #include "K2Node_MakeArray.h"
+#include "K2Node_MakeContainer.h"
+#include "K2Node_BreakStruct.h"
 #include "K2Node_FunctionEntry.h"
 #include "RetainedBlueprintGeneration.h"
 #include "BlueprintNativizationSubsystem.h"
@@ -20,6 +23,7 @@
 #include "K2Node_CallParentFunction.h"
 #include "K2Node_CommutativeAssociativeBinaryOperator.h"
 #include "K2Node_PromotableOperator.h"
+#include "BlueprintTypePromotion.h"
 #include "TranslatorObjects/InputEventTranslatorObject.h"
 #include "Kismet/KismetTextLibrary.h"
 #include "K2Node_IfThenElse.h"
@@ -46,19 +50,66 @@ static FString GetCallResultPurpose(UK2Node_CallFunction* Call)
     return FunctionName + TEXT("Result");
 }
 
-bool UCallFunctionTranslatorObject::ShouldExpandNode(UK2Node* Node) const
+
+
+static FGenerateResultStruct ResolveMemberCallTarget(UK2Node_CallFunction* Call, FGenerateResultStruct Target,
+    UNativizationV2Subsystem* Subsystem)
 {
-    if (UK2Node_CommutativeAssociativeBinaryOperator* Operator = Cast<UK2Node_CommutativeAssociativeBinaryOperator>(Node))
+    if (UK2Node_CallFunctionOnMember* MemberCall = Cast<UK2Node_CallFunctionOnMember>(Call))
     {
-        return Operator->GetNumberOfAdditionalInputs() > 0;
+        FProperty* Property = MemberCall->MemberVariableToCallOn.ResolveMember<FProperty>(Call->GetBlueprint()->GeneratedClass);
+        if (!Property)
+        {
+            FNativeApiCatalog::AddError(TEXT("Cannot resolve member function receiver: ") + Call->GetPathName());
+            return {};
+        }
+        FString Receiver = Target.Code;
+        if (Receiver.IsEmpty())
+        {
+            Receiver = TEXT("this");
+        }
+        Target.Code = FRetainedBlueprintGeneration::PreparePropertyRead(Property, Receiver, Call, Subsystem, Target.Preparations);
     }
-    if (Node->IsA<UK2Node_PromotableOperator>())
-    {
-        return true;
-    }
-    return Node->IsA<UK2Node_Message>() || Node->IsA<UK2Node_CallFunctionOnMember>();
+    return Target;
 }
 
+static bool IsMutableArgumentSource(UEdGraphPin* SourcePin, TArray<UK2Node*> MacroStack,
+    UNativizationV2Subsystem* Subsystem)
+{
+    while (SourcePin && !SourcePin->PinType.bIsConst)
+    {
+        if (SourcePin->GetOwningNode()->IsA<UK2Node_MakeContainer>())
+        {
+            return false;
+        }
+        if (UK2Node_BreakStruct* Break = Cast<UK2Node_BreakStruct>(SourcePin->GetOwningNode()))
+        {
+            FProperty* Member = FindFProperty<FProperty>(Break->StructType, SourcePin->PinName);
+            if (!Member || Member->HasAnyPropertyFlags(CPF_BlueprintReadOnly) ||
+                Break->StructType->HasMetaData(TEXT("HasNativeBreak")) ||
+                UBlueprintNativizationSettingsLibrary::FindStructTranslator(Break->StructType))
+            {
+                return false;
+            }
+            UEdGraphPin* StructurePin = Break->FindPin(Break->StructType->GetFName(), EGPD_Input);
+            if (!StructurePin)
+            {
+                for (UEdGraphPin* Candidate : Break->Pins)
+                {
+                    if (Candidate->Direction == EGPD_Input && Candidate->PinType.PinCategory == UEdGraphSchema_K2::PC_Struct)
+                    {
+                        StructurePin = Candidate;
+                        break;
+                    }
+                }
+            }
+            SourcePin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(StructurePin, 0, true, MacroStack, Subsystem);
+            continue;
+        }
+        return SourcePin->PinType.bIsReference || SourcePin->GetOwningNode()->IsA<UK2Node_VariableGet>();
+    }
+    return false;
+}
 
 FString UCallFunctionTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 	FString EntryPinName,
@@ -138,6 +189,40 @@ FString UCallFunctionTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
 
     TArray<FGenerateResultStruct> Targets;
     FGenerationPreparations NewPreparations;
+    FString ArrayIteration;
+    FString ArrayCondition;
+    const FString EvaluationPurpose = NativizationV2Subsystem->InputEvaluationPurpose;
+    TGuardValue<FString> InvocationPurpose(NativizationV2Subsystem->InputEvaluationPurpose, EvaluationPurpose);
+    UEdGraphPin* ReceiverPin = CallFunctionNode->FindPin(UEdGraphSchema_K2::PN_Self);
+    TArray<UK2Node*> ReceiverStack = MacroStack;
+    UEdGraphPin* ReceiverSource = nullptr;
+    if (ReceiverPin && ReceiverPin->LinkedTo.Num() == 1)
+    {
+        ReceiverSource = UBlueprintNativizationLibrary::GetFirstNonKnotPin(ReceiverPin, 0, true, ReceiverStack, NativizationV2Subsystem);
+    }
+    const bool bArrayReceiver = !Function->HasAnyFunctionFlags(FUNC_Static) && ReceiverSource &&
+        ReceiverSource->PinType.IsArray() && CallFunctionNode->AllowMultipleSelfs(true);
+    if (bArrayReceiver)
+    {
+        ArrayIteration = NativizationV2Subsystem->GetNodeStateName(Node, TEXT("ReceiverIndex"), true);
+        TGuardValue<FString> ConditionPurpose(NativizationV2Subsystem->InputEvaluationPurpose, EvaluationPurpose + TEXT(":ReceiverCondition"));
+        const FGenerateResultStruct Array = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, ReceiverPin, 0, MacroStack);
+        ArrayCondition = FString::Join(Array.Preparations.Array(), TEXT("\n")) +
+            TEXT("\nif (") + ArrayIteration + TEXT(" >= (") + Array.Code + TEXT(").Num())\n{\nbreak;\n}\n");
+    }
+    if (bArrayReceiver)
+    {
+        NativizationV2Subsystem->InputEvaluationPurpose = EvaluationPurpose + TEXT(":ReceiverInvocation");
+    }
+    auto WrapInvocation = [&](const FString& Invocation)
+    {
+        if (bArrayReceiver)
+        {
+            return TEXT("for (int32 ") + ArrayIteration + TEXT(" = 0; ; ++") + ArrayIteration + TEXT(")\n{\n") +
+                ArrayCondition + Invocation + TEXT("}\n");
+        }
+        return Invocation;
+    };
     if (!Function->HasAnyFunctionFlags(FUNC_Static))
     {
         UEdGraphPin* TargetPin = CallFunctionNode->FindPin(TEXT("self"));
@@ -153,6 +238,21 @@ FString UCallFunctionTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
             {
                 Target = NativizationV2Subsystem->GenerateInputParameterCodeForNode(Node, TargetPin, TargetIndex, MacroStack);
             }
+            if (bArrayReceiver)
+            {
+                const FString ArrayName = NativizationV2Subsystem->GetNodeStateName(Node, TEXT("ReceiverArray"), true);
+                const FString TargetName = NativizationV2Subsystem->GetNodeStateName(Node, TEXT("ReceiverObject"), true);
+                FEdGraphPinType ElementType = ReceiverSource->PinType;
+                ElementType.ContainerType = EPinContainerType::None;
+                ElementType.bIsReference = false;
+                ElementType.bIsConst = false;
+                Target.Preparations.Add(TEXT("auto&& ") + ArrayName + TEXT(" = ") + Target.Code + TEXT(";\n") +
+                    UBlueprintNativizationLibrary::GetPinType(ElementType, false) + TEXT(" ") + TargetName +
+                    TEXT("{};\nif (") + ArrayName + TEXT(".IsValidIndex(") + ArrayIteration + TEXT("))\n{\n") +
+                    TargetName + TEXT(" = ") + ArrayName + TEXT("[") + ArrayIteration + TEXT("];\n}\n"));
+                Target.Code = TargetName;
+            }
+            Target = ResolveMemberCallTarget(CallFunctionNode, Target, NativizationV2Subsystem);
             NewPreparations.Append(Target.Preparations);
             Targets.Add(Target);
         }
@@ -187,7 +287,7 @@ FString UCallFunctionTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
                 Content += Invocation.Code + TEXT(";\n");
             }
         }
-        return Content;
+        return WrapInvocation(Content);
     }
     TMap<FName, FString> ArgumentOverrides;
     FString BeforeCall;
@@ -251,7 +351,7 @@ FString UCallFunctionTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
     };
 
     GenerateStandardCall();
-    return Content;
+    return WrapInvocation(Content);
 }
 
 
@@ -285,7 +385,7 @@ void UCallFunctionTranslatorObject::BuildArgs(bool bIsStatic, FString& Code, FGe
         }
 		FString ParamCPPName = ParamIt->GetNameCPP();
 		UEdGraphPin* Pin = CallFunctionNode->FindPin(ParamIt->GetFName());
-		
+
 		if (!Pin) continue;
 
 		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec || Pin == ReturnPin)
@@ -335,7 +435,7 @@ void UCallFunctionTranslatorObject::BuildArgs(bool bIsStatic, FString& Code, FGe
 
 			/*
 			FGenerateResultStruct InputParameterCode = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallFunctionNode, Pin, 0, MacroStack);
-			
+
 			Preparation.Append(InputParameterCode.Preparations);
 			Preparation.Add(FString::Format(TEXT("{0} {1} = {2};"), { *UBlueprintNativizationLibrary::GetPinType(Pin->PinType, true),
 				UBlueprintNativizationLibrary::GetUniquePinName(Pin, NativizationV2Subsystem->EntryNodes),
@@ -344,8 +444,19 @@ void UCallFunctionTranslatorObject::BuildArgs(bool bIsStatic, FString& Code, FGe
 		}
 		else if (Pin->Direction == EGPD_Input)
 		{
+            const FName LibraryName = Function->GetOwnerClass()->GetFName();
+            const bool bEngineContainerWriter = Function->GetOutermost()->GetName() == TEXT("/Script/Engine") &&
+                (LibraryName == TEXT("KismetArrayLibrary") || LibraryName == TEXT("KismetMapLibrary") || LibraryName == TEXT("KismetSetLibrary")) &&
+                !Function->HasAnyFunctionFlags(FUNC_BlueprintPure);
+            const bool bMutableContainer = Pin->PinType.IsContainer() &&
+                (ParamIt->HasAnyPropertyFlags(CPF_OutParm | CPF_ReferenceParm) || bEngineContainerWriter) &&
+                (!ParamIt->HasAnyPropertyFlags(CPF_ConstParm) ||
+                    bEngineContainerWriter);
+            TGuardValue<bool> StorageScope(NativizationV2Subsystem->bRequiresInputStorage, bMutableContainer);
 			FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(CallFunctionNode, Pin, 0, MacroStack);
 			Preparation.Append(InputResultStruct.Preparations);
+            InputResultStruct.Code = ConvertPromotableArgument(CallFunctionNode, Pin, *ParamIt,
+                InputResultStruct.Code, NativizationV2Subsystem);
             if (FDelegateProperty* DelegateParameter = CastField<FDelegateProperty>(*ParamIt))
             {
                 const FString DelegateType = DelegateParameter->GetCPPType(nullptr, CPPF_BlueprintCppBackend);
@@ -367,8 +478,7 @@ void UCallFunctionTranslatorObject::BuildArgs(bool bIsStatic, FString& Code, FGe
                 !ParamIt->HasAnyPropertyFlags(CPF_ConstParm) && Pin->Direction == EGPD_Input)
             {
                 UEdGraphPin* SourcePin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin, 0, true, MacroStack, NativizationV2Subsystem);
-                if (!SourcePin || SourcePin->GetOwningNode()->IsA<UK2Node_MakeArray>() ||
-                    (!SourcePin->PinType.bIsReference && !SourcePin->GetOwningNode()->IsA<UK2Node_VariableGet>()))
+                if (!IsMutableArgumentSource(SourcePin, MacroStack, NativizationV2Subsystem))
                 {
                     FEdGraphPinType ValueType = Pin->PinType;
                     ValueType.bIsReference = false;
@@ -426,7 +536,7 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
         return UBlueprintNativizationLibrary::GetUniquePinName(UBlueprintNativizationLibrary::GetParentPin(Pin), Subsystem->EntryNodes);
     }
     UEdGraphPin* ReturnPin = Call->GetReturnValuePin();
-    if (const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(Node))
+    if (const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(Subsystem->GetEvaluationKey(Node)))
     {
         FGenerateResultStruct Result = *Cached;
         if (Pin != ReturnPin)
@@ -444,6 +554,72 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
     }
     UFunction* Function = UBlueprintNativizationLibrary::GetFunctionDeclaration(OriginalFunction);
     const FString FunctionName = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, TEXT(""));
+    TArray<UEdGraphPin*> OperatorInputs;
+    UK2Node_PromotableOperator* Promotable = Cast<UK2Node_PromotableOperator>(Call);
+    UK2Node_CommutativeAssociativeBinaryOperator* Commutative = Cast<UK2Node_CommutativeAssociativeBinaryOperator>(Call);
+    if ((Promotable && !FTypePromotion::IsComparisonFunc(Function)) || Commutative)
+    {
+        for (UEdGraphPin* Input : Call->Pins)
+        {
+            if (Input->Direction == EGPD_Input && !Input->ParentPin && !Input->bHidden &&
+                Input->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec && Input->PinName != UEdGraphSchema_K2::PN_Self)
+            {
+                OperatorInputs.Add(Input);
+            }
+        }
+    }
+    if (OperatorInputs.Num() > 2)
+    {
+        FGenerateResultStruct Result;
+        const FGenerateResultStruct FirstValue = Subsystem->GenerateInputParameterCodeForNode(Node, OperatorInputs[0], 0, MacroStack);
+        Result.Preparations.Append(FirstValue.Preparations);
+        FString PreviousValue = Subsystem->GetNodeStateName(Node, TEXT("OperatorArgument0"), true);
+        Result.Preparations.Add(TEXT("const auto ") + PreviousValue + TEXT(" = ") + FirstValue.Code + TEXT(";\n"));
+        UFunction* StepFunction = Function;
+        for (int32 InputIndex = 1; InputIndex < OperatorInputs.Num(); ++InputIndex)
+        {
+            if (Promotable && InputIndex > 1)
+            {
+                const TArray<UEdGraphPin*> Types = {ReturnPin, OperatorInputs[InputIndex], ReturnPin};
+                if (UFunction* Matching = FTypePromotion::FindBestMatchingFunc(Promotable->GetOperationName(), Types))
+                {
+                    StepFunction = Matching;
+                }
+            }
+            TArray<FProperty*> Parameters;
+            for (TFieldIterator<FProperty> Parameter(StepFunction); Parameter; ++Parameter)
+            {
+                if (Parameter->HasAnyPropertyFlags(CPF_Parm) && !Parameter->HasAnyPropertyFlags(CPF_ReturnParm))
+                {
+                    Parameters.Add(*Parameter);
+                }
+            }
+            if (Parameters.Num() != 2)
+            {
+                FNativeApiCatalog::AddError(TEXT("A variadic operator requires a binary function: ") + Call->GetPathName());
+                return {};
+            }
+            UEdGraphPin* PreviousType = ReturnPin;
+            if (InputIndex == 1)
+            {
+                PreviousType = OperatorInputs[0];
+            }
+            const FString Left = ConvertPromotableArgument(Call, PreviousType, Parameters[0], PreviousValue, Subsystem);
+            const FGenerateResultStruct Value = Subsystem->GenerateInputParameterCodeForNode(Node, OperatorInputs[InputIndex], 0, MacroStack);
+            Result.Preparations.Append(Value.Preparations);
+            const FString ArgumentName = Subsystem->GetNodeStateName(Node, TEXT("OperatorArgument") + FString::FromInt(InputIndex), true);
+            Result.Preparations.Add(TEXT("const auto ") + ArgumentName + TEXT(" = ") + Value.Code + TEXT(";\n"));
+            const FString Right = ConvertPromotableArgument(Call, OperatorInputs[InputIndex], Parameters[1], ArgumentName, Subsystem);
+            const TArray<FString> Arguments = {Left, Right};
+            const FString Invocation = GenerateStaticFunctionCall(StepFunction, FString::Join(Arguments, TEXT(", ")), &Arguments);
+            PreviousValue = Subsystem->GetNodeStateName(Node, TEXT("OperatorStep") + FString::FromInt(InputIndex), true);
+            Result.Preparations.Add(TEXT("const auto ") + PreviousValue + TEXT(" = ") + Invocation + TEXT(";\n"));
+        }
+        Result.Code = PreviousValue;
+        Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
+        return Result;
+    }
+
     FString ProjectionInput;
     TArray<TPair<FString, FString>> ProjectionOutputs;
     if (FNativeFunctionExpressions::Projection(Function, ProjectionInput, ProjectionOutputs))
@@ -467,7 +643,7 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
         }
         Result.Preparations.Add(Statements + TEXT("}\n"));
         Result.Code = UBlueprintNativizationLibrary::GetUniquePinName(Pin, Subsystem->EntryNodes);
-        Subsystem->PureFunctionCalls.Add(Node, Result);
+        Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
         return Result;
     }
     FString Arguments;
@@ -481,7 +657,7 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
     }
     else
     {
-        const FGenerateResultStruct Target = Subsystem->GenerateInputParameterCodeForNode(Node, Call->FindPin(TEXT("self")), 0, MacroStack);
+        const FGenerateResultStruct Target = ResolveMemberCallTarget(Call, Subsystem->GenerateInputParameterCodeForNode(Node, Call->FindPin(TEXT("self")), 0, MacroStack), Subsystem);
         Preparations.Append(Target.Preparations);
         InstanceTarget = Target.Code;
         FunctionExpression = FunctionName;
@@ -513,7 +689,7 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
             Invocation.Preparations.Add(Invocation.Code + TEXT(";\n"));
         }
         FGenerateResultStruct Result(ResultName, Invocation.Preparations);
-        Subsystem->PureFunctionCalls.Add(Node, Result);
+        Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
         if (Pin != ReturnPin)
         {
             Result.Code = UBlueprintNativizationLibrary::GetUniquePinName(Pin, Subsystem->EntryNodes);
@@ -568,7 +744,7 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
     {
         Invocation = AdaptReturnValue(Call, Invocation, Preparations);
         FGenerateResultStruct Result(Invocation, Preparations);
-        Subsystem->PureFunctionCalls.Add(Node, Result);
+        Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
         return Result;
     }
     FString ResultName;
@@ -603,7 +779,7 @@ FGenerateResultStruct UCallFunctionTranslatorObject::GenerateInputParameterCodeF
         }
     }
     FGenerateResultStruct Result(ResultName, Preparations);
-    Subsystem->PureFunctionCalls.Add(Node, Result);
+    Subsystem->PureFunctionCalls.Add(Subsystem->GetEvaluationKey(Node), Result);
     if (Pin != ReturnPin)
     {
         Result.Code = UBlueprintNativizationLibrary::GetUniquePinName(Pin, Subsystem->EntryNodes);
@@ -662,8 +838,12 @@ TSet<FString> UCallFunctionTranslatorObject::GenerateLocalVariables(UK2Node* Inp
 
 		for (UEdGraphPin* RootPropertyPin : RootPropertyPins)
 		{
+            if (GEngine->GetEngineSubsystem<UBlueprintNativizationUniqueNameSubsystem>()->IsPersistentPinVariable(RootPropertyPin))
+            {
+                continue;
+            }
 			FString VarName = UBlueprintNativizationLibrary::GetUniquePinName(RootPropertyPin, NativizationV2Subsystem->EntryNodes);
-			Contents.Add(FString::Format(TEXT("{0} {1} = {2};\n"), { *UBlueprintNativizationLibrary::GetPinType(RootPropertyPin->PinType, false), *VarName, UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(RootPropertyPin->GetName(), RootPropertyPin->PinType, RootPropertyPin->DefaultValue, RootPropertyPin->DefaultObject, NativizationV2Subsystem->LeftAllAssetRefInBlueprint) }));
+			Contents.Add(FString::Format(TEXT("{0} {1} = {2};\n"), { *UBlueprintNativizationLibrary::GetPinType(RootPropertyPin->PinType, false), *VarName, UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(RootPropertyPin->GetName(), RootPropertyPin->PinType, RootPropertyPin->DefaultValue, RootPropertyPin->DefaultObject) }));
 		}
 	}
 
@@ -678,16 +858,18 @@ TSet<FString> UCallFunctionTranslatorObject::GenerateCppIncludeInstructions(UK2N
         Includes.Append(GetMutableDefault<UInputEventTranslatorObject>()->GenerateCppIncludeInstructions(Node, NativizationV2Subsystem));
     }
 
+    bool bReflectionOnlyStaticCall = false;
 	if (UK2Node_CallFunction* CallFunctionNode = Cast<UK2Node_CallFunction>(Node))
 	{
 		if (UFunction* Function = UBlueprintNativizationLibrary::GetFunctionDeclaration(CallFunctionNode->GetTargetFunction()))
 		{
-			if (Function->IsNative() || FRetainedBlueprintGeneration::UsesReflection(Function))
+			if (Function->IsNative() || Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface) || FRetainedBlueprintGeneration::UsesReflection(Function))
 			{
+                bReflectionOnlyStaticCall = Function->HasAnyFunctionFlags(FUNC_Static) && FRetainedBlueprintGeneration::UsesReflection(Function);
 				if (UClass* OwnerClass = Function->GetOwnerClass())
 				{
 					FString IncludePath;
-					if (NativizationV2Subsystem->GetIncludeFromField(OwnerClass, IncludePath))
+					if (!bReflectionOnlyStaticCall && NativizationV2Subsystem->GetIncludeFromField(OwnerClass, IncludePath))
 					{
 						Includes.Add(IncludePath);
 					}
@@ -698,6 +880,10 @@ TSet<FString> UCallFunctionTranslatorObject::GenerateCppIncludeInstructions(UK2N
 
     for (UEdGraphPin* Pin : Node->Pins)
     {
+        if (bReflectionOnlyStaticCall && Pin->PinName == UEdGraphSchema_K2::PN_Self)
+        {
+            continue;
+        }
         FString IncludePath;
         UField* PinField = Cast<UField>(Pin->PinType.PinSubCategoryObject.Get());
         if (PinField && NativizationV2Subsystem->GetIncludeFromField(PinField, IncludePath))
@@ -777,8 +963,7 @@ FString UCallFunctionTranslatorObject::AdaptReturnValue(UK2Node_CallFunction* Ca
     {
         FString ObjectExpression = Expression;
         UFunction* Function = UBlueprintNativizationLibrary::GetFunctionDeclaration(Call->GetTargetFunction());
-        if (Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Native) &&
-            !UBlueprintNativizationLibrary::GetPinType(ReturnPin->PinType, false).StartsWith(TEXT("const ")))
+        if (Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Native) && !UBlueprintNativizationLibrary::GetPinType(ReturnPin->PinType, false).StartsWith(TEXT("const ")))
         {
             if (const TSharedPtr<FJsonObject> OwnerType = FNativeApiCatalog::FindType(Function->GetOwnerClass()))
             {

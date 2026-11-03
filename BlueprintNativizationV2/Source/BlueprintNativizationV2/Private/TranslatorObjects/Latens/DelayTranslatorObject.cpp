@@ -48,17 +48,18 @@ bool UDelayTranslatorObject::CanApply(UK2Node* Node)
 void UDelayTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path,
     TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* Subsystem)
 {
-    TArray<UK2Node*> MacroStack;
+    TArray<UK2Node*> MacroStack = Path;
     UEdGraphPin* Target = UBlueprintNativizationLibrary::GetFirstNonKnotPin(
         InputNode->FindPin(UEdGraphSchema_K2::PN_Then), 0, false, MacroStack, Subsystem);
     if (!Target)
     {
         return;
     }
+    TGuardValue<TArray<UK2Node*>> TargetScope(Subsystem->CurrentMacroStack, MacroStack);
     UK2Node* TargetNode = CastChecked<UK2Node>(Target->GetOwningNode());
     for (FGenerateFunctionStruct& Entry : EntryNodes)
     {
-        if (Entry.Node == TargetNode && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName())
+        if (Entry.Node == TargetNode && Entry.MacroStack == MacroStack && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName())
         {
             Entry.bIsLatentContinuation = true;
             Entry.EntryPinName = Target->GetName();
@@ -67,6 +68,7 @@ void UDelayTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2N
     }
     FGenerateFunctionStruct Continuation;
     Continuation.Node = TargetNode;
+    Continuation.MacroStack = MacroStack;
     FString CompletionName = CastChecked<UK2Node_CallFunction>(InputNode)->GetTargetFunction()->GetName() + TEXT("Completed");
     if (Target->PinName != UEdGraphSchema_K2::PN_Execute)
     {
@@ -130,18 +132,25 @@ FString UDelayTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString Entr
     TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations,
     UNativizationV2Subsystem* Subsystem)
 {
+    if (!SupportsNativeOperation(CastChecked<UK2Node_CallFunction>(Node)->GetTargetFunction()))
+    {
+        FNativeApiCatalog::AddError(TEXT("No native asynchronous implementation is available for ") + Node->GetPathName());
+        return {};
+    }
+
     UK2Node_CallFunction* Call = CastChecked<UK2Node_CallFunction>(Node);
     UFunction* Function = Call->GetTargetFunction();
     const FString FunctionName = Function->GetName();
     const FString State = Subsystem->GetNodeStateName(Node, FunctionName + TEXT("Operation"));
     FString Completed;
+    TArray<UK2Node*> ContinuationPath = MacroStack;
     UEdGraphPin* Target = UBlueprintNativizationLibrary::GetFirstNonKnotPin(
-        Node->FindPin(UEdGraphSchema_K2::PN_Then), 0, false, MacroStack, Subsystem);
+        Node->FindPin(UEdGraphSchema_K2::PN_Then), 0, false, ContinuationPath, Subsystem);
     if (Target)
     {
         const FGenerateFunctionStruct* Continuation = Subsystem->EntryNodes.FindByPredicate([&](const FGenerateFunctionStruct& Entry)
         {
-            return Entry.Node == Target->GetOwningNode() && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName();
+            return Entry.Node == Target->GetOwningNode() && Entry.MacroStack == ContinuationPath && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName();
         });
         if (!Continuation)
         {

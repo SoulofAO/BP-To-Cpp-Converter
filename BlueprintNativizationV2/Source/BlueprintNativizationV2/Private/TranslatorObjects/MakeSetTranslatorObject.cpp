@@ -18,7 +18,7 @@ FGenerateResultStruct UMakeSetTranslatorObject::GenerateInputParameterCodeForNod
 
 		for (UEdGraphPin* ElementPin : MakeSetNode->Pins)
 		{
-			if (ElementPin->Direction == EGPD_Input)
+			if (ElementPin->Direction == EGPD_Input && !ElementPin->ParentPin && !ElementPin->bOrphanedPin)
 			{
 				FGenerateResultStruct InputResultStruct = NativizationV2Subsystem->GenerateInputParameterCodeForNode(MakeSetNode, ElementPin, 0, MacroStack);
 				Elements.Add(InputResultStruct.Code);

@@ -76,20 +76,6 @@ bool UExternalBlueprintStructTranslator::Translate(const FStructTranslationReque
         for (TFieldIterator<FProperty> Member(Request.Structure); Member; ++Member)
         {
             const void* MemberAddress = Member->ContainerPtrToValuePtr<void>(Source);
-            if (FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(*Member))
-            {
-                UObject* Object = ObjectProperty->GetObjectPropertyValue(MemberAddress);
-                if (Object && Object->IsAsset() && !Request.bKeepAssetReferencesInBlueprint)
-                {
-                    FString Include;
-                    if (GEngine->GetEngineSubsystem<UNativizationV2Subsystem>()->GetIncludeFromField(Object->GetClass(), Include))
-                    {
-                        Include.RemoveFromStart(TEXT("#include \""));
-                        Include.RemoveFromEnd(TEXT("\""));
-                        Result.HeaderIncludes.Add(Include);
-                    }
-                }
-            }
             Arguments.Add({Member->GetFName(), FStructInitialization::PropertyExpression(*Member, MemberAddress, Request), {}});
         }
     }

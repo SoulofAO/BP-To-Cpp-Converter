@@ -12,7 +12,7 @@ class MODULE_EXPORT FGeneratedSubsystemRuntime
 public:
     static void Startup();
     static void Shutdown();
-    static bool ShouldCreateSubsystem(const UObject* Object, UObject* Outer, UClass* NativeClass, bool bKeepAssetReferences);
+    static bool ShouldCreateSubsystem(const UObject* Object, UObject* Outer, UClass* NativeClass);
     static void RegisterSubsystemClass(UClass* Class);
 };
 )SUBSYSTEM");
@@ -94,7 +94,7 @@ public:
 };
 
 bool FGeneratedSubsystemRuntime::ShouldCreateSubsystem(const UObject* Object, UObject* Outer,
-    UClass* NativeClass, bool bKeepAssetReferences)
+    UClass* NativeClass)
 {
     return Object->GetClass() != NativeClass;
 }

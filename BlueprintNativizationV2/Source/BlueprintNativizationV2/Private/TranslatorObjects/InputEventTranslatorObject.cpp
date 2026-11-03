@@ -1,6 +1,7 @@
 #include "TranslatorObjects/InputEventTranslatorObject.h"
 #include "BlueprintNativizationLibrary.h"
 #include "BlueprintNativizationSubsystem.h"
+#include "BlueprintNativizationSettings.h"
 #include "Engine/InputDelegateBinding.h"
 #include "K2Node_Event.h"
 #include "K2Node_EnhancedInputAction.h"
@@ -66,6 +67,7 @@ FString UInputEventTranslatorObject::GenerateSetupPlayerInputComponentFunction(U
             continue;
         }
         FScriptArrayHelper Values(Property, Property->ContainerPtrToValuePtr<void>(Binding));
+        Content += BindingName + TEXT("->") + Property->GetNameCPP() + TEXT(".Reset();\n");
         for (int32 ValueIndex = 0; ValueIndex < Values.Num(); ++ValueIndex)
         {
             if (Entry)
@@ -75,12 +77,17 @@ FString UInputEventTranslatorObject::GenerateSetupPlayerInputComponentFunction(U
                     FunctionName->SetPropertyValue_InContainer(Values.GetRawPtr(ValueIndex), Entry->Name);
                 }
             }
+            FStructTranslationRequest Request;
+            Request.Structure = Element->Struct;
+            Request.Operation = EStructTranslationOperation::PropertyValue;
+            Request.PropertyValue = Values.GetRawPtr(ValueIndex);
+            Request.OwnerClass = InputNode->GetBlueprint()->GeneratedClass;
+            Request.OwnerExpression = TEXT("this");
+            FGenerationPreparations Preparations;
+            const FString Expression = UBlueprintNativizationSettingsLibrary::TranslateStructure(Request, &Preparations);
+            Content += FString::Join(Preparations.Array(), TEXT("\n")) + TEXT("\n");
+            Content += BindingName + TEXT("->") + Property->GetNameCPP() + TEXT(".Add(") + Expression + TEXT(");\n");
         }
-        FString Serialized;
-        Property->ExportTextItem_Direct(Serialized, Property->ContainerPtrToValuePtr<void>(Binding), nullptr, Binding, PPF_None);
-        Serialized = Serialized.ReplaceCharWithEscapedChar();
-        Content += FString::Format(TEXT("FindFProperty<FProperty>({0}::StaticClass(), TEXT(\"{1}\"))->ImportText_Direct(TEXT(\"{2}\"), &{3}->{1}, {3}, PPF_None);\n"),
-            { BindingClassName, Property->GetName(), Serialized, BindingName });
     }
     Content += BindingName + TEXT("->BindToInputComponent(PlayerInputComponent, this);\n}\n");
     return Content;
@@ -90,5 +97,5 @@ TSet<FString> UInputEventTranslatorObject::GenerateCppIncludeInstructions(UK2Nod
 {
     FString Include;
     Subsystem->GetIncludeFromField(Node->GetDynamicBindingClass(), Include);
-    return { Include, TEXT("#include \"UObject/UnrealType.h\""), TEXT("#include \"Components/InputComponent.h\""), TEXT("#include \"GameFramework/InputSettings.h\"") };
+    return { Include, TEXT("#include \"Components/InputComponent.h\""), TEXT("#include \"GameFramework/InputSettings.h\"") };
 }

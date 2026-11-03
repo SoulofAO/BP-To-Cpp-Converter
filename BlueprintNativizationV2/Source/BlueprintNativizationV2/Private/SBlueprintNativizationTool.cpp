@@ -16,6 +16,7 @@
 #include "ContentBrowserModule.h"
 #include "ContentBrowserDataSubsystem.h"
 #include "Editor.h"
+#include "GameProjectGenerationModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Blueprint/BlueprintSupport.h"
 #include "AssetThumbnail.h"
@@ -505,6 +506,15 @@ void SBlueprintNativizationTool::Construct(const FArguments& Arguments)
         TSharedPtr<SCheckBox> ModeButton;
         SAssignNew(ModeButton, SCheckBox)
             .IsEnabled_Lambda([this]() { return !bOperationRunning; })
+            .ForegroundColor_Lambda([this, ButtonMode]()
+            {
+                if (ButtonMode != EToolMode::Setup &&
+                    (!ReadySections.Contains(TEXT("Module")) || !Session->IsPreparedModuleLoaded()))
+                {
+                    return FSlateColor(FLinearColor(0.4f, 0.4f, 0.4f));
+                }
+                return FSlateColor::UseForeground();
+            })
             .Style(&FAppStyle::Get().GetWidgetStyle<FCheckBoxStyle>(TEXT("ToggleButtonCheckbox")))
             .IsChecked_Lambda([this, ButtonMode]()
             {
@@ -547,6 +557,10 @@ void SBlueprintNativizationTool::Construct(const FArguments& Arguments)
     SAssignNew(PrimaryAction, SButton).HAlign(HAlign_Center).ContentPadding(FMargin(12, 8)).ButtonStyle(FAppStyle::Get(), TEXT("PrimaryButton"))
         .ButtonColorAndOpacity_Lambda([this]()
         {
+            if (!ReadySections.Contains(TEXT("Module")) || !Session->IsPreparedModuleLoaded())
+            {
+                return FSlateColor(FLinearColor(0.055f, 0.055f, 0.055f));
+            }
             if (Mode == EToolMode::Setup)
             {
                 if (IsSetupReady())
@@ -559,6 +573,10 @@ void SBlueprintNativizationTool::Construct(const FArguments& Arguments)
         })
         .ForegroundColor_Lambda([this]()
         {
+            if (!ReadySections.Contains(TEXT("Module")) || !Session->IsPreparedModuleLoaded())
+            {
+                return FSlateColor(FLinearColor(0.4f, 0.4f, 0.4f));
+            }
             if (Mode == EToolMode::Setup && IsSetupReady())
             {
                 return FSlateColor(FLinearColor(0.01f, 0.01f, 0.01f));
@@ -703,7 +721,24 @@ void SBlueprintNativizationTool::Construct(const FArguments& Arguments)
             { Session->GetModuleName(), Session->Targets.Num(), PreviewStatus }));
     });
     TSharedPtr<STextBlock> NextStep;
-    SAssignNew(NextStep, STextBlock).Tag(TEXT("NextStep")).AutoWrapText(true).Text_Lambda([this]()
+    SAssignNew(NextStep, STextBlock).Tag(TEXT("NextStep")).AutoWrapText(true)
+        .Font_Lambda([this]()
+        {
+            if (Mode == EToolMode::Export)
+            {
+                return FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 20);
+            }
+            return FAppStyle::GetFontStyle(TEXT("NormalFont"));
+        })
+        .ColorAndOpacity_Lambda([this]()
+        {
+            if (Mode == EToolMode::Export)
+            {
+                return FSlateColor(FLinearColor(1.0f, 0.85f, 0.0f));
+            }
+            return FSlateColor::UseForeground();
+        })
+        .Text_Lambda([this]()
     {
         if (Mode == EToolMode::Preview && Session->Targets.IsEmpty())
         {
@@ -853,6 +888,11 @@ TSharedRef<SWidget> SBlueprintNativizationTool::MakeAction(const FString& Label,
         })
         .ForegroundColor_Lambda([this, Label]()
         {
+            if (Label != TEXT("Prepare module") && Label != TEXT("Refresh readiness") &&
+                (!ReadySections.Contains(TEXT("Module")) || !Session->IsPreparedModuleLoaded()))
+            {
+                return FSlateColor(FLinearColor(0.4f, 0.4f, 0.4f));
+            }
             if (ShouldHighlightPreparationAction(Label))
             {
                 return FSlateColor(FLinearColor(0.01f, 0.01f, 0.01f));
@@ -884,6 +924,11 @@ bool SBlueprintNativizationTool::IsPreparationAction(const FString& Label) const
 
 bool SBlueprintNativizationTool::ShouldHighlightPreparationAction(const FString& Label) const
 {
+    if (Label != TEXT("Prepare module") &&
+        (!ReadySections.Contains(TEXT("Module")) || !Session->IsPreparedModuleLoaded()))
+    {
+        return false;
+    }
     if (Mode == EToolMode::Assets)
     {
         if (Label == TEXT("Add selected"))
@@ -928,7 +973,7 @@ bool SBlueprintNativizationTool::ShouldHighlightPreparationAction(const FString&
 
 bool SBlueprintNativizationTool::IsSetupReady() const
 {
-    return ReadySections.Contains(TEXT("Module")) && ReadySections.Contains(TEXT("Project API cache")) &&
+    return ReadySections.Contains(TEXT("Module")) && Session->IsPreparedModuleLoaded() && ReadySections.Contains(TEXT("Project API cache")) &&
         ReadySections.Contains(TEXT("Engine API cache")) && Session->IsNativeApiReady() &&
         !bOperationRunning && !FNativeCacheTask::IsRunning();
 }
@@ -1106,7 +1151,7 @@ void SBlueprintNativizationTool::SetMode(EToolMode NewMode)
                     return Text;
                 }), TAttribute<bool>::CreateLambda([this, Section]()
                 {
-                    return ReadySections.Contains(Section);
+                    return ReadySections.Contains(Section) && Session->IsPreparedModuleLoaded();
                 }), CacheAction);
             if (Section == TEXT("Module"))
             {
@@ -1240,6 +1285,13 @@ void SBlueprintNativizationTool::SetMode(EToolMode NewMode)
     }
     if (Mode == EToolMode::Setup)
     {
+        if (!FGameProjectGenerationModule::Get().ProjectHasCodeFiles())
+        {
+            TSharedPtr<STextBlock> BlueprintProjectWarning;
+            SAssignNew(BlueprintProjectWarning, STextBlock).AutoWrapText(true).ColorAndOpacity(FLinearColor(1.0f, 0.65f, 0.15f))
+                .Text(FText::FromString(TEXT("Blueprint-only projects require C++ setup before conversion. Add an empty C++ class in Unreal Editor, then build the project with the C++ compiler and Windows SDK installed. Prepare module updates existing .Target.cs files but does not create missing targets. Your Blueprint gameplay logic does not need to be rewritten manually.")));
+            ModulePanel->AddSlot().AutoHeight().Padding(12, 6, 12, 12)[BlueprintProjectWarning.ToSharedRef()];
+        }
         ModulePanel->AddSlot().AutoHeight().Padding(12, 6)[MakeText(TEXT("C++ module"))];
 
         TSharedPtr<SEditableTextBox> ModuleNameEditor;
@@ -1254,6 +1306,20 @@ void SBlueprintNativizationTool::SetMode(EToolMode NewMode)
             });
         ModulePanel->AddSlot().AutoHeight().Padding(12, 6)[ModuleNameEditor.ToSharedRef()];
         ModulePanel->AddSlot().AutoHeight().Padding(12, 6)[ModuleStatus.ToSharedRef()];
+        TSharedPtr<STextBlock> ModuleBuildWarning;
+        SAssignNew(ModuleBuildWarning, STextBlock).AutoWrapText(true)
+            .Font(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 20))
+            .ColorAndOpacity(FLinearColor(1.0f, 0.45f, 0.05f))
+            .Visibility_Lambda([this]()
+            {
+                if (ReadySections.Contains(TEXT("Module")) && !Session->IsPreparedModuleLoaded())
+                {
+                    return EVisibility::Visible;
+                }
+                return EVisibility::Collapsed;
+            })
+            .Text(FText::FromString(TEXT("Recompile the project before building API caches.\nClose Unreal Editor, build the project's Editor target, then reopen the project.")));
+        ModulePanel->AddSlot().AutoHeight().Padding(12, 6)[ModuleBuildWarning.ToSharedRef()];
         ModulePanel->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(12, 6)[MakeAction(TEXT("Prepare module"), FSimpleDelegate::CreateLambda([this]()
         {
             Session->PrepareModule();
@@ -1263,15 +1329,7 @@ void SBlueprintNativizationTool::SetMode(EToolMode NewMode)
         ModePanel->AddSlot().AutoHeight().Padding(12, 10)[MakeText(TEXT("Export settings"))];
         ModePanel->AddSlot().AutoHeight().Padding(12, 6)[Details.ToSharedRef()];
         ModePanel->AddSlot().AutoHeight().Padding(12)[MakeText(TEXT("C++ behavior and component creation; serialized Blueprint configuration."))];
-        if (!Session->bLeaveAssetReferencesInBlueprint)
-        {
-            ModePanel->AddSlot().AutoHeight().Padding(12)[MakeAction(TEXT("Reset unsupported defaults mode"), FSimpleDelegate::CreateLambda([this]()
-            {
-                Session->bLeaveAssetReferencesInBlueprint = true;
-                Session->SaveSetup();
-                SetMode(EToolMode::Setup);
-            }), true)];
-        }
+
         ModePanel->AddSlot().AutoHeight().Padding(12, 6)[MakeAnalysisPanel(TEXT("Next steps"),
             TAttribute<FString>(TEXT("Build API caches, then analyze native API access. Review any proposed fixes before exporting. You can select assets at any time.")))];
     }
@@ -1489,6 +1547,7 @@ static FARFilter MakeContentFilter(const FString& Path)
     Filter.PackagePaths.Add(FName(*Path));
     Filter.bRecursivePaths = true;
     Filter.ClassPaths = { UBlueprint::StaticClass()->GetClassPathName(), UUserDefinedStruct::StaticClass()->GetClassPathName(), UUserDefinedEnum::StaticClass()->GetClassPathName() };
+    Filter.ClassPaths.Add(FTopLevelAssetPath(TEXT("/Script/Engine"), TEXT("UserDefinedStruct")));
     Filter.bRecursiveClasses = true;
     return Filter;
 }

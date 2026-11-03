@@ -55,7 +55,7 @@ class FCppDeclarationReader
     size_t ReadDeclaration(size_t Start, size_t End, int Parent, const std::string &Scope, bool bRecord,
                            ECppAccess Access);
     int ReadVariable(size_t Begin, size_t End, int Parent, const std::string &Scope, const std::string &Kind,
-                     ECppAccess Access);
+                     ECppAccess Access, const std::string& SharedType = {});
     void ReadBody(size_t Begin, size_t End, int Parent, const std::string &Scope);
     void ReadExpressions(size_t Begin, size_t End, int Parent, const std::string &Scope);
 };
@@ -1093,12 +1093,32 @@ size_t FCppDeclarationReader::ReadRecord(size_t Start, size_t End, int Parent, c
 }
 
 int FCppDeclarationReader::ReadVariable(size_t Begin, size_t End, int Parent, const std::string &Scope,
-                                        const std::string &Kind, ECppAccess Access)
+                                        const std::string &Kind, ECppAccess Access, const std::string& SharedType)
 {
     if (Begin >= End)
     {
         return -1;
     }
+    std::vector<std::pair<size_t, size_t>> Declarators;
+    size_t DeclaratorBegin = Begin;
+    for (size_t Position = Begin; Position < End; ++Position)
+    {
+        if (At(Position) == "(" || At(Position) == "[" || At(Position) == "{" || At(Position) == "<")
+        {
+            const size_t Close = Match(Position, End);
+            if (Close < End)
+            {
+                Position = Close;
+            }
+        }
+        else if (At(Position) == ",")
+        {
+            Declarators.emplace_back(DeclaratorBegin, Position);
+            DeclaratorBegin = Position + 1;
+        }
+    }
+    Declarators.emplace_back(DeclaratorBegin, End);
+    End = Declarators.front().second;
     size_t Boundary = Begin;
     while (Boundary < End && At(Boundary) != "=" && At(Boundary) != "[" && At(Boundary) != ":" && At(Boundary) != "{")
     {
@@ -1114,7 +1134,7 @@ int FCppDeclarationReader::ReadVariable(size_t Begin, size_t End, int Parent, co
     {
         --Name;
     }
-    if (Name <= Begin + 1)
+    if (Name <= Begin || (Name == Begin + 1 && SharedType.empty()))
     {
         return Builder.AddNode(MakeNode(Begin, End, "UnresolvedDeclaration", ECppNodeCategory::Other, Scope), Parent);
     }
@@ -1124,6 +1144,17 @@ int FCppDeclarationReader::ReadVariable(size_t Begin, size_t End, int Parent, co
     Variable.Symbol = Builder.Declare(Scope, Variable.Name, Kind);
     Variable.Access = Access;
     std::string Type = Join(Begin, Name);
+    if (!SharedType.empty())
+    {
+        if (Type.empty())
+        {
+            Type = SharedType;
+        }
+        else
+        {
+            Type = SharedType + " " + Type;
+        }
+    }
     if (At(Boundary) == "[")
     {
         Type += Join(Boundary, std::min(Match(Boundary, End) + 1, End));
@@ -1148,6 +1179,24 @@ int FCppDeclarationReader::ReadVariable(size_t Begin, size_t End, int Parent, co
     if (Boundary < End)
     {
         ReadExpressions(Boundary + 1, End, Index, Scope);
+    }
+    if (Declarators.size() > 1)
+    {
+        size_t TypeEnd = Begin;
+        while (TypeEnd < Name && At(TypeEnd) != "*" && At(TypeEnd) != "&" && At(TypeEnd) != "&&")
+        {
+            if (At(TypeEnd) == "<")
+            {
+                TypeEnd = Match(TypeEnd, Name);
+            }
+            ++TypeEnd;
+        }
+        const std::string CommonType = Join(Begin, TypeEnd);
+        for (size_t DeclaratorIndex = 1; DeclaratorIndex < Declarators.size(); ++DeclaratorIndex)
+        {
+            ReadVariable(Declarators[DeclaratorIndex].first, Declarators[DeclaratorIndex].second,
+                Parent, Scope, Kind, Access, CommonType);
+        }
     }
     return Index;
 }
@@ -1292,6 +1341,29 @@ size_t FCppDeclarationReader::ReadDeclaration(size_t Start, size_t End, int Pare
     {
         Name = OperatorStart;
     }
+    if (bRecord && At(Name) == ">")
+    {
+        size_t TemplateStart = Name;
+        unsigned TemplateDepth = 1;
+        while (TemplateStart > Start && TemplateDepth > 0)
+        {
+            --TemplateStart;
+            if (At(TemplateStart) == ">")
+            {
+                ++TemplateDepth;
+            }
+            else if (At(TemplateStart) == "<")
+            {
+                --TemplateDepth;
+            }
+        }
+        const auto Record = Builder.Document.Symbols.find(Scope);
+        if (TemplateDepth == 0 && TemplateStart > Start && Record != Builder.Document.Symbols.end() &&
+            At(TemplateStart - 1) == Record->second.Name)
+        {
+            Name = TemplateStart - 1;
+        }
+    }
     if (Tokens[Name].Kind != "Identifier")
     {
         Builder.AddNode(MakeNode(Start, Finish + 1, "UnresolvedDeclaration", ECppNodeCategory::Other, Scope), Parent);
@@ -1412,6 +1484,10 @@ size_t FCppDeclarationReader::ReadDeclaration(size_t Start, size_t End, int Pare
         {
             if (ParameterStart < Current && Join(ParameterStart, Current) != "void")
             {
+                while (ParameterStart + 1 < Current && At(ParameterStart) == "UPARAM" && At(ParameterStart + 1) == "(")
+                {
+                    ParameterStart = Match(ParameterStart + 1, Current) + 1;
+                }
                 ParameterRanges.emplace_back(ParameterStart, Current);
                 size_t TypeEnd = ParameterStart;
                 while (TypeEnd < Current && At(TypeEnd) != "=")

@@ -10,6 +10,8 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "K2Node_CallFunction.h"
 #include "RetainedBlueprintGeneration.h"
+#include "NativeApiCatalog.h"
+#include "StructInitialization.h"
 
 bool UBreakStructTranslatorObject::CanApply(UK2Node* Node)
 {
@@ -27,16 +29,45 @@ FGenerateResultStruct UBreakStructTranslatorObject::GenerateInputParameterCodeFo
         TArray<UEdGraphPin*> PathPins = UBlueprintNativizationLibrary::GetParentPathPins(Pin);
         Algo::Reverse(PathPins);
 
+        UScriptStruct* CurrentStructure = BreakStruct->StructType;
         for (UEdGraphPin* CheckPin : PathPins)
         {
-            FProperty* Property = BreakStruct->StructType->FindPropertyByName(*CheckPin->GetName());
-            FText Text = Property->GetDisplayNameText();
-            if (UBlueprintNativizationSettingsLibrary::FindStructTranslator(BreakStruct->StructType))
+            FString MemberName = CheckPin->PinName.ToString();
+            if (CheckPin->ParentPin)
+            {
+                MemberName.RemoveFromStart(CheckPin->ParentPin->PinName.ToString() + TEXT("_"));
+            }
+            FProperty* Property = CurrentStructure->FindPropertyByName(FName(*MemberName));
+            const bool bHasTranslator = UBlueprintNativizationSettingsLibrary::FindStructTranslator(CurrentStructure) != nullptr;
+            FGenerateResultStruct NativeMember;
+            UEdGraphPin* StructurePin = CheckPin->ParentPin;
+            if (!StructurePin)
+            {
+                StructurePin = Pins[0];
+            }
+            if (!bHasTranslator && FStructInitialization::TryReadNativeMember(CurrentStructure, StructurePin,
+                FName(*MemberName), GenerateInputCodeStruct.Code, NativizationV2Subsystem, NativeMember))
+            {
+                GenerateInputCodeStruct.Preparations.Append(NativeMember.Preparations);
+                GenerateInputCodeStruct.Code = NativeMember.Code;
+                if (UScriptStruct* OutputStructure = Cast<UScriptStruct>(CheckPin->PinType.PinSubCategoryObject.Get()))
+                {
+                    CurrentStructure = OutputStructure;
+                }
+                continue;
+            }
+            if (!Property && !bHasTranslator)
+            {
+                FNativeApiCatalog::AddError(TEXT("Cannot resolve a structure member: ") + CurrentStructure->GetPathName() + TEXT(".") + MemberName);
+                return {};
+            }
+            if (bHasTranslator)
             {
                 FStructTranslationRequest Request;
-                Request.Structure = BreakStruct->StructType;
+                Request.Structure = CurrentStructure;
                 Request.Operation = EStructTranslationOperation::ReadMember;
-                Request.MemberName = Property->GetFName();
+                Request.MemberName = FName(*MemberName);
+                Request.DestinationType = UBlueprintNativizationLibrary::GetPinType(CheckPin->PinType, false);
                 Request.SourceExpression = TEXT("(") + GenerateInputCodeStruct.Code + TEXT(")");
                 GenerateInputCodeStruct.Code = UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
             }
@@ -64,7 +95,10 @@ FGenerateResultStruct UBreakStructTranslatorObject::GenerateInputParameterCodeFo
                     GenerateInputCodeStruct.Code += TEXT(".") + UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
                 }
             }
-            CheckPin = CheckPin->ParentPin;
+            if (UScriptStruct* OutputStructure = Cast<UScriptStruct>(CheckPin->PinType.PinSubCategoryObject.Get()))
+            {
+                CurrentStructure = OutputStructure;
+            }
         }
 
         return GenerateInputCodeStruct;

@@ -1,7 +1,14 @@
 #include "StructInitialization.h"
+#include "Misc/DefaultValueHelper.h"
+#include "Misc/PackageName.h"
 #include "BlueprintNativizationLibrary.h"
 #include "UObject/UnrealType.h"
 #include <charconv>
+#include "BlueprintNativizationSubsystem.h"
+#include "GenerationGraphContext.h"
+#include "NativeGenerationContext.h"
+#include "NativeApiCatalog.h"
+#include "TranslatorObjects/CallFunctionTranslatorObject.h"
 
 static void ClearInitializationAssetValues(FProperty* Property, void* Value)
 {
@@ -64,22 +71,42 @@ bool FStructInitialization::IsValueOperation(EStructTranslationOperation Operati
 
 const void* FStructInitialization::ReadValue(const FStructTranslationRequest& Request, FStructOnScope& Storage, FString& Error)
 {
-    if (Request.PropertyValue && !Request.bKeepAssetReferencesInBlueprint)
-    {
-        return Request.PropertyValue;
-    }
+
     if (Request.PropertyValue)
     {
         Request.Structure->CopyScriptStruct(Storage.GetStructMemory(), Request.PropertyValue);
     }
-    if (!Request.SerializedValue.IsEmpty() &&
+    bool bParsedPinLiteral = false;
+    if (!Request.SerializedValue.Contains(TEXT("=")) && Request.SerializedValue.Contains(TEXT(",")))
+    {
+        if (Request.Structure == TBaseStructure<FVector>::Get())
+        {
+            bParsedPinLiteral = FDefaultValueHelper::ParseVector(Request.SerializedValue, *reinterpret_cast<FVector*>(Storage.GetStructMemory()));
+        }
+        else if (Request.Structure == TBaseStructure<FRotator>::Get())
+        {
+            bParsedPinLiteral = FDefaultValueHelper::ParseRotator(Request.SerializedValue, *reinterpret_cast<FRotator*>(Storage.GetStructMemory()));
+        }
+        else if (Request.Structure == TBaseStructure<FVector2D>::Get())
+        {
+            bParsedPinLiteral = FDefaultValueHelper::ParseVector2D(Request.SerializedValue, *reinterpret_cast<FVector2D*>(Storage.GetStructMemory()));
+        }
+        else if (Request.Structure == TBaseStructure<FVector4>::Get())
+        {
+            bParsedPinLiteral = FDefaultValueHelper::ParseVector4(Request.SerializedValue, *reinterpret_cast<FVector4*>(Storage.GetStructMemory()));
+        }
+        else if (Request.Structure == TBaseStructure<FLinearColor>::Get())
+        {
+            bParsedPinLiteral = FDefaultValueHelper::ParseLinearColor(Request.SerializedValue, *reinterpret_cast<FLinearColor*>(Storage.GetStructMemory()));
+        }
+    }
+    if (!bParsedPinLiteral && !Request.SerializedValue.IsEmpty() &&
         !Request.Structure->ImportText(*Request.SerializedValue, Storage.GetStructMemory(),
             const_cast<UObject*>(Request.OwnerObject), PPF_None, nullptr, Request.Structure->GetName()))
     {
         Error = TEXT("Invalid serialized structure value.");
         return nullptr;
     }
-    if (Request.bKeepAssetReferencesInBlueprint)
     {
         for (TFieldIterator<FProperty> Member(Request.Structure); Member; ++Member)
         {
@@ -125,8 +152,7 @@ FString FStructInitialization::Quote(const FString& Value)
 
 FString FStructInitialization::PropertyExpression(FProperty* Property, const void* Value, const FStructTranslationRequest& Request)
 {
-    return UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property,
-        Request.bKeepAssetReferencesInBlueprint, const_cast<void*>(Value), Request.OwnerExpression);
+    return UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(Property, const_cast<void*>(Value), Request.OwnerExpression);
 }
 
 bool FStructInitialization::Describe(const FStructTranslationRequest& Request, FStructTranslationResult& Result,
@@ -336,5 +362,91 @@ bool FStructInitialization::Fallback(const FStructTranslationRequest& Request, F
         }
         Result.InitializationInstructions.Add(TEXT("}"));
     }
+    return true;
+}
+
+bool FStructInitialization::TryReadNativeMember(UScriptStruct* Structure, UEdGraphPin* StructurePin, FName MemberName,
+    const FString& SourceExpression, UNativizationV2Subsystem* Subsystem, FGenerateResultStruct& Result)
+{
+    FString FunctionPath = Structure->GetMetaData(TEXT("HasNativeBreak"));
+    if (FunctionPath.IsEmpty())
+    {
+        return false;
+    }
+    int32 SeparatorIndex;
+    if (FunctionPath.FindLastChar(TEXT('.'), SeparatorIndex))
+    {
+        FunctionPath[SeparatorIndex] = TEXT(':');
+    }
+    UFunction* Function = FindObject<UFunction>(nullptr, *FunctionPath);
+    if (!Function || !Function->HasAllFunctionFlags(FUNC_Static | FUNC_BlueprintPure) || Function->GetReturnProperty())
+    {
+        FNativeApiCatalog::AddError(TEXT("Invalid native structure break contract: ") + FunctionPath);
+        return true;
+    }
+    UK2Node* Node = CastChecked<UK2Node>(StructurePin->GetOwningNode());
+    const FString CacheKey = Subsystem->GetEvaluationKey(Node) + TEXT(":NativeBreak:") + StructurePin->PinId.ToString();
+    const FGenerateResultStruct* Cached = Subsystem->PureFunctionCalls.Find(CacheKey);
+    if (!Cached)
+    {
+        FGenerateResultStruct Values;
+        Values.Code = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(
+            FGenerationGraphContext::GetBlueprint()->GeneratedClass, TEXT("NativeBreakValues"));
+        FString Declaration = TEXT("struct\n{\n");
+        TArray<FString> Arguments;
+        bool bHasSource = false;
+        for (TFieldIterator<FProperty> Parameter(Function); Parameter; ++Parameter)
+        {
+            if (!Parameter->HasAnyPropertyFlags(CPF_Parm))
+            {
+                continue;
+            }
+            if (Parameter->HasAnyPropertyFlags(CPF_OutParm) && !Parameter->HasAnyPropertyFlags(CPF_ConstParm))
+            {
+                const FString Name = TEXT("Value") + UBlueprintNativizationLibrary::GetUniquePropertyName(*Parameter);
+                FString ValueType = UBlueprintNativizationLibrary::GetPropertyType(*Parameter);
+                ValueType.RemoveFromEnd(TEXT("&"));
+                ValueType.TrimEndInline();
+                Declaration += ValueType + TEXT(" ") + Name + TEXT("{};\n");
+                Arguments.Add(Values.Code + TEXT(".") + Name);
+            }
+            else if (const FStructProperty* Input = CastField<FStructProperty>(*Parameter); Input && Input->Struct == Structure && !bHasSource)
+            {
+                Arguments.Add(SourceExpression);
+                bHasSource = true;
+            }
+            else
+            {
+                FNativeApiCatalog::AddError(TEXT("Unsupported native structure break parameter: ") + Parameter->GetPathName());
+                return true;
+            }
+        }
+        if (!bHasSource)
+        {
+            FNativeApiCatalog::AddError(TEXT("A native structure break contract has no source: ") + FunctionPath);
+            return true;
+        }
+        FString Include;
+        if (Subsystem->GetIncludeFromField(Function->GetOwnerClass(), Include))
+        {
+            FNativeGenerationContext::AddImplementationInclude(Include);
+        }
+        FStructTranslationResult Requirements;
+        Requirements.ModuleDependencies.Add(FPackageName::GetShortName(Function->GetOutermost()));
+        FNativeGenerationContext::AddRequirements(Requirements);
+        Declaration += TEXT("} ") + Values.Code + TEXT(";\n");
+        Values.Preparations.Add(Declaration + GetMutableDefault<UCallFunctionTranslatorObject>()->GenerateStaticFunctionCall(
+            Function, FString::Join(Arguments, TEXT(", ")), &Arguments) + TEXT(";\n"));
+        Subsystem->PureFunctionCalls.Add(CacheKey, Values);
+        Cached = Subsystem->PureFunctionCalls.Find(CacheKey);
+    }
+    FProperty* Output = Function->FindPropertyByName(MemberName);
+    if (!Output || !Output->HasAnyPropertyFlags(CPF_OutParm) || Output->HasAnyPropertyFlags(CPF_ConstParm))
+    {
+        FNativeApiCatalog::AddError(TEXT("Missing native structure break output: ") + FunctionPath + TEXT(".") + MemberName.ToString());
+        return true;
+    }
+    Result = *Cached;
+    Result.Code += TEXT(".Value") + UBlueprintNativizationLibrary::GetUniquePropertyName(Output);
     return true;
 }

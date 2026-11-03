@@ -19,7 +19,7 @@ bool UVariableSetTranslatorObject::CanApply(UK2Node* Node)
         return false;
     }
     FProperty* Property = UBlueprintNativizationLibrary::ResolveVariableProperty(Setter);
-    return !Property || !Property->HasMetaData(FBlueprintMetadata::MD_PropertySetFunction);
+    return true;
 }
 
 FString UVariableSetTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString EntryPinName,
@@ -83,6 +83,16 @@ FString UVariableSetTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStrin
             }
         }
     }
+    if (Property->HasMetaData(FBlueprintMetadata::MD_PropertySetFunction))
+    {
+        UFunction* SetterFunction = Property->GetOwnerClass()->FindFunctionByName(FName(*Property->GetMetaData(FBlueprintMetadata::MD_PropertySetFunction)));
+        FString Receiver = ReceiverName;
+        if (Receiver.IsEmpty())
+        {
+            Receiver = TEXT("this");
+        }
+        return Content + FRetainedBlueprintGeneration::CallPropertyAccessor(Property, SetterFunction, Receiver, Value.Code, true) + TEXT(";\n") + Notification;
+    }
     if (bRetainedOwner)
     {
         if (ReceiverName.IsEmpty())
@@ -92,8 +102,9 @@ FString UVariableSetTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FStrin
         return Content + FRetainedBlueprintGeneration::WriteProperty(Property, ReceiverName, Value.Code) + Notification;
     }
     FGetterAndSetterPropertyDescriptor Descriptor;
-    if (UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(Property, Descriptor) &&
-        !Descriptor.SetterPropertyFunctionName.IsEmpty())
+    const bool bUsesSetter = UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(Property, Descriptor) &&
+        !Descriptor.SetterPropertyFunctionName.IsEmpty();
+    if (bUsesSetter)
     {
         Assignment = Descriptor.SetterPropertyFunctionName + TEXT("(") + Value.Code + TEXT(");\n");
         if (bExternalTarget)

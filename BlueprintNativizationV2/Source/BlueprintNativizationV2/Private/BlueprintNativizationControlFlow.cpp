@@ -3,6 +3,7 @@
 #include "BlueprintNativizationSettings.h"
 #include "BlueprintNativizationUniqueNameSubsystem.h"
 #include "GeneratedCodeCleanup.h"
+#include "GenerationGraphContext.h"
 #include "Engine/Engine.h"
 #include "Engine/Blueprint.h"
 #include "K2Node_FunctionResult.h"
@@ -126,18 +127,11 @@ UEdGraphPin* UNativizationV2Subsystem::FindCommonExecutionTail(const TArray<UEdG
 
 FString UNativizationV2Subsystem::GetNodeStateName(UK2Node* Node, const FString& Suffix, bool bLocal)
 {
-    const FString Prefix = ExpandedNodeNames.FindRef(Node);
+    const TArray<UK2Node*> NodeMacroStack = FGenerationGraphContext::GetMacroStack(Node);
     FString Name = Suffix;
-    if (!bLocal && !Prefix.IsEmpty() && !Suffix.StartsWith(Prefix))
+    for (UK2Node* Macro : NodeMacroStack)
     {
-        if (Suffix.StartsWith(TEXT("Input") + Prefix))
-        {
-            Name = Prefix + TEXT("Input") + Suffix.Mid(5 + Prefix.Len());
-        }
-        else
-        {
-            Name = Prefix + Suffix;
-        }
+        Name = Macro->GetGraph()->GetName() + Name;
     }
     FString Identifier;
     for (TCHAR Character : Name)
@@ -180,13 +174,30 @@ FString UNativizationV2Subsystem::GetNodeStateName(UK2Node* Node, const FString&
             OwnerFunction = UBlueprintNativizationLibrary::GetFunctionByNodeAndEntryNodes(Context, EntryNodes);
         }
     }
-    FString EvaluationIdentity;
+    FString EvaluationIdentity = Node->GetPathName();
+    for (UK2Node* Macro : NodeMacroStack)
+    {
+        EvaluationIdentity += TEXT(":") + Macro->GetPathName();
+    }
+    if (bLocal)
+    {
+        EvaluationIdentity += TEXT(":") + InputEvaluationPurpose;
+        if (bRequiresInputStorage)
+        {
+            EvaluationIdentity += TEXT(":Storage");
+        }
+    }
+    UBlueprint* Blueprint = FGenerationGraphContext::GetBlueprint();
+    if (!Blueprint)
+    {
+        Blueprint = Node->GetBlueprint();
+    }
     if (bLocal && DataConsumer)
     {
-        EvaluationIdentity = DataConsumer->GetPathName() + TEXT(":") + InputEvaluationPurpose;
+        EvaluationIdentity += FString::Format(TEXT(":{0}:{1}"), {DataConsumer->GetPathName(), CurrentEvaluation});
     }
     return GEngine->GetEngineSubsystem<UBlueprintNativizationUniqueNameSubsystem>()->GenerateUniqueLambdaVariableName(
-        Identifier, Node->GetBlueprint()->GeneratedClass, OwnerFunction, Node, EntryNode, EvaluationIdentity).ToString();
+        Identifier, Blueprint->GeneratedClass, OwnerFunction, Node, EntryNode, EvaluationIdentity).ToString();
 }
 
 FString UNativizationV2Subsystem::RegisterRepeatedCall(const FString& Signature, const FString& Name,
@@ -265,8 +276,8 @@ FString UNativizationV2Subsystem::GenerateControlFlowFunctions(const FGenerateFu
     UK2Node* EntryNode = Function.Node;
     TArray<FVisitedNodeStack> ActiveEntries;
     TArray<FVisitedNodeStack> CompletedEntries;
-    TFunction<void(UK2Node*, FString)> VisitNode;
-    VisitNode = [&](UK2Node* Node, FString EntryPinName)
+    TFunction<void(UK2Node*, FString, TArray<UK2Node*>)> VisitNode;
+    VisitNode = [&](UK2Node* Node, FString EntryPinName, TArray<UK2Node*> Path)
     {
         if (!Node)
         {
@@ -274,9 +285,9 @@ FString UNativizationV2Subsystem::GenerateControlFlowFunctions(const FGenerateFu
         }
         const bool bOtherEntry = EntryNodes.ContainsByPredicate([&](const FGenerateFunctionStruct& Entry)
         {
-            return Entry.Node == Node && (!Entry.bIsLatentContinuation || Entry.EntryPinName == EntryPinName);
+            return Entry.Node == Node && Entry.MacroStack == Path && (!Entry.bIsLatentContinuation || Entry.EntryPinName == EntryPinName);
         });
-        if ((Node != EntryNode || EntryPinName != Function.EntryPinName) && bOtherEntry)
+        if ((Node != EntryNode || EntryPinName != Function.EntryPinName || Path != Function.MacroStack) && bOtherEntry)
         {
             return;
         }
@@ -285,7 +296,9 @@ FString UNativizationV2Subsystem::GenerateControlFlowFunctions(const FGenerateFu
         {
             return;
         }
-        const FVisitedNodeStack Entry(Node, EntryPinName);
+        TGuardValue<TArray<UK2Node*>> MacroScope(CurrentMacroStack, Path);
+        FVisitedNodeStack Entry(Node, EntryPinName);
+        Entry.MacroStack = Path;
         if (ActiveEntries.Contains(Entry))
         {
             UTranslatorBPToCppObject* Translator = FindTranslatorForNode(Node);
@@ -312,16 +325,16 @@ FString UNativizationV2Subsystem::GenerateControlFlowFunctions(const FGenerateFu
         for (UEdGraphPin* Pin : UBlueprintNativizationLibrary::GetFilteredPins(Node,
             EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin))
         {
-            TArray<UK2Node*> MacroStack;
+            TArray<UK2Node*> MacroStack = Path;
             if (UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin, 0, false, MacroStack, this))
             {
-                VisitNode(Cast<UK2Node>(NextPin->GetOwningNode()), NextPin->GetName());
+                VisitNode(Cast<UK2Node>(NextPin->GetOwningNode()), NextPin->GetName(), MacroStack);
             }
         }
         ActiveEntries.Pop();
         CompletedEntries.Add(Entry);
     };
-    VisitNode(EntryNode, Function.EntryPinName);
+    VisitNode(EntryNode, Function.EntryPinName, Function.MacroStack);
     FString Content;
     FProperty* ReturnProperty = nullptr;
     if (Function.OriginalUFunction)
@@ -356,11 +369,11 @@ FString UNativizationV2Subsystem::GenerateControlFlowFunctions(const FGenerateFu
         const FVisitedNodeStack& Entry = ControlFunctionEntries[FunctionIndex];
         bGeneratingControlFunctionEntry = true;
         bInsideControlFunction = true;
-        const FString Body = GenerateCodeFromNode(Entry.Node, Entry.EntryPinName, {}, {}, {});
+        const FString Body = GenerateCodeFromNode(Entry.Node, Entry.EntryPinName, {}, {}, Entry.MacroStack);
         Content += FString::Format(TEXT("{0} = [&]()\n{\n{1}};\n"), { ControlFunctionNames[FunctionIndex], Body });
     }
     bInsideControlFunction = false;
-    Content += GenerateCodeFromNode(EntryNode, Function.EntryPinName, {}, {}, {});
+    Content += GenerateCodeFromNode(EntryNode, Function.EntryPinName, {}, {}, Function.MacroStack);
     TArray<FString> BodyLines;
     Content.TrimEnd().ParseIntoArrayLines(BodyLines);
     if (ReturnProperty && !DoesExecutionAlwaysReturn(EntryNode, this, {}) &&
@@ -416,4 +429,18 @@ int32 UNativizationV2Subsystem::GetLatentActionIdentifier(UK2Node* Node)
     const int32 Identifier = LatentActionIdentifiers.Num() + 1;
     LatentActionIdentifiers.Add(Node, Identifier);
     return Identifier;
+}
+
+FString UNativizationV2Subsystem::GetEvaluationKey(UK2Node* Node) const
+{
+    FString Identity = Node->GetPathName() + TEXT(":") + InputEvaluationPurpose;
+    if (DataConsumer)
+    {
+        Identity += FString::Format(TEXT(":{0}:{1}"), {DataConsumer->GetPathName(), CurrentEvaluation});
+    }
+    for (UK2Node* Macro : CurrentMacroStack)
+    {
+        Identity += TEXT(":") + Macro->GetPathName();
+    }
+    return Identity;
 }

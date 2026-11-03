@@ -691,7 +691,7 @@ FNativeApiCache FNativeApiCacheBuilder::Build(const FNativeApiCacheRequest &Requ
             {
                 return Token.Spelling == "inline";
             });
-            if (Node.bDefinition && Document.SourceFile.size() > 2 && Document.SourceFile.substr(Document.SourceFile.size() - 2) == ".h" &&
+            if ((Node.bDefinition || Node.bDefaulted) && Document.SourceFile.size() > 2 && Document.SourceFile.substr(Document.SourceFile.size() - 2) == ".h" &&
                 ((!bFreeFunction && Node.LexicalScope == Node.SemanticScope) || bExplicitInline ||
                     std::any_of(Node.Tokens.begin(), Node.Tokens.end(), [](const FCppToken& Token)
                     {
@@ -920,7 +920,7 @@ static std::string JsonCallable(const FNativeApiCallable &Callable)
 std::string FNativeApiCache::ToJson() const
 {
     std::ostringstream Output;
-    Output << std::boolalpha << "{\"SchemaVersion\":1,\"AnalyzerVersion\":\"NativeApiCache.Text.18\",\"Configuration\":"
+    Output << std::boolalpha << "{\"SchemaVersion\":1,\"AnalyzerVersion\":\"NativeApiCache.Text.20\",\"Configuration\":"
            << JsonString(Configuration) << ",\"Arguments\":" << JsonArray(Arguments, JsonString)
            << ",\"SemanticallyVerified\":false,\"Succeeded\":" << bSucceeded << ",\"Sources\":"
            << JsonArray(Sources,

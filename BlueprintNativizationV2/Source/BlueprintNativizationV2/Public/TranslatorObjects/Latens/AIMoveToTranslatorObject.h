@@ -22,6 +22,18 @@ public:
         NodeNamesForCheck = { };
     }
 
-    virtual bool ShouldExpandNode(UK2Node* Node) const override;
 
+    virtual FString GenerateGlobalVariables(UK2Node* Node, FString Prefix, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateLocalVariables(UK2Node* Node, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override { return {}; }
+    virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override;
+    virtual void GenerateNewFunction(UK2Node* Node, TArray<UK2Node*> Path, TArray<FGenerateFunctionStruct>& Entries, UNativizationV2Subsystem* Subsystem) override;
+    virtual FString GenerateCodeFromNode(UK2Node* Node, FString EntryPinName, TArray<FVisitedNodeStack> VisitedNodes, TArray<UK2Node*> MacroStack, FGenerationPreparations& Preparations, UNativizationV2Subsystem* Subsystem) override;
+    virtual bool CanContinueCodeGeneration(UK2Node* Node, FString EntryPinName) override { return false; }
+    virtual bool ShouldPrepareInputs(UK2Node* Node, const FString& EntryPinName) const override { return false; }
+    virtual TSet<FString> GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateCSPrivateDependencyModuleNames(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override
+    {
+        return {TEXT("\"AIModule\"")};
+    }
 };

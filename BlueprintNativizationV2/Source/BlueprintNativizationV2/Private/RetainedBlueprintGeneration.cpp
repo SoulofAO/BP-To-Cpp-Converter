@@ -3,6 +3,7 @@
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationSettings.h"
 #include "NativeApiCatalog.h"
+#include "NativeFunctionExpressions.h"
 #include "NativeGenerationContext.h"
 #include "TranslatorObjects/StructTranslatorObject.h"
 #include "TranslatorObjects/CallFunctionTranslatorObject.h"
@@ -57,7 +58,6 @@
 
 static TSet<UClass*> GeneratedBlueprintClasses;
 static TSet<UField*> GeneratedValueTypes;
-static TSet<UClass*> RetainedClassDependencies;
 static bool bRetainedReflectionUsed = false;
 static TMap<UObject*, FString> InstancedObjectNames;
 static TMap<UObject*, FString> ConstructingObjects;
@@ -67,8 +67,6 @@ static UBlueprint* OwningBlueprint = nullptr;
 static TMap<UClass*, FString> AssetClassMembers;
 static TMap<FString, FString> MigrationClassMembers;
 static TMap<UActorComponent*, FString> ComponentTemplateMembers;
-static TMap<UActorComponent*, FString> ComponentTemplateInitializations;
-static TMap<UClass*, FString> CachedClassMembers;
 static FString InstanceInitialization;
 static TMap<UObject*, FString> AssetObjectMembers;
 static TMap<UObject*, UClass*> AssetObjectConstraints;
@@ -85,7 +83,7 @@ void FRetainedBlueprintGeneration::AddInstanceInitialization(const FString& Init
     InstanceInitialization += Initialization + TEXT("\n");
 }
 
-bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProperty* Property, const void* PropertyMemory, bool bKeepAssetReferences, bool bInitializeExistingStructure)
+bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProperty* Property, const void* PropertyMemory, bool bInitializeExistingStructure)
 {
     if (Property->IsA<FSoftObjectProperty>())
     {
@@ -104,21 +102,21 @@ bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProper
         }
         if (UClass* Class = Cast<UClass>(Object))
         {
-            if (bKeepAssetReferences && !Class->HasAnyClassFlags(CLASS_Native))
+            if (!Class->HasAnyClassFlags(CLASS_Native))
             {
                 return true;
             }
             FString Include;
             return CanUseStaticClass(Class, Include);
         }
-        return bKeepAssetReferences && Object->IsAsset();
+        return Object->IsAsset();
     }
     if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
     {
         FScriptArrayHelper ArrayValues(ArrayProperty, PropertyMemory);
         for (int32 ElementIndex = 0; ElementIndex < ArrayValues.Num(); ++ElementIndex)
         {
-            if (!CanInitializeValueBeforeEngineStartup(ArrayProperty->Inner, ArrayValues.GetRawPtr(ElementIndex), bKeepAssetReferences))
+            if (!CanInitializeValueBeforeEngineStartup(ArrayProperty->Inner, ArrayValues.GetRawPtr(ElementIndex)))
             {
                 return false;
             }
@@ -131,7 +129,7 @@ bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProper
         for (int32 ElementIndex = 0; ElementIndex < SetValues.GetMaxIndex(); ++ElementIndex)
         {
             if (SetValues.IsValidIndex(ElementIndex) &&
-                !CanInitializeValueBeforeEngineStartup(SetProperty->ElementProp, SetValues.GetElementPtr(ElementIndex), bKeepAssetReferences))
+                !CanInitializeValueBeforeEngineStartup(SetProperty->ElementProp, SetValues.GetElementPtr(ElementIndex)))
             {
                 return false;
             }
@@ -144,8 +142,8 @@ bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProper
         for (int32 ElementIndex = 0; ElementIndex < MapValues.GetMaxIndex(); ++ElementIndex)
         {
             if (MapValues.IsValidIndex(ElementIndex) &&
-                (!CanInitializeValueBeforeEngineStartup(MapProperty->KeyProp, MapValues.GetKeyPtr(ElementIndex), bKeepAssetReferences) ||
-                    !CanInitializeValueBeforeEngineStartup(MapProperty->ValueProp, MapValues.GetValuePtr(ElementIndex), bKeepAssetReferences)))
+                (!CanInitializeValueBeforeEngineStartup(MapProperty->KeyProp, MapValues.GetKeyPtr(ElementIndex)) ||
+                    !CanInitializeValueBeforeEngineStartup(MapProperty->ValueProp, MapValues.GetValuePtr(ElementIndex))))
             {
                 return false;
             }
@@ -165,7 +163,6 @@ bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProper
             Request.Structure = Structure;
             Request.Property = Property;
             Request.PropertyValue = PropertyMemory;
-            Request.bKeepAssetReferencesInBlueprint = bKeepAssetReferences;
             Request.Operation = EStructTranslationOperation::PropertyValue;
             return Translator->CanInitializeValueBeforeEngineStartup(Request);
         }
@@ -225,7 +222,7 @@ bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProper
             for (int32 ElementIndex = 0; ElementIndex < PropertyIterator->ArrayDim; ++ElementIndex)
             {
                 if (!CanInitializeValueBeforeEngineStartup(*PropertyIterator,
-                    PropertyIterator->ContainerPtrToValuePtr<void>(PropertyMemory, ElementIndex), bKeepAssetReferences))
+                    PropertyIterator->ContainerPtrToValuePtr<void>(PropertyMemory, ElementIndex)))
                 {
                     return false;
                 }
@@ -237,7 +234,7 @@ bool FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(FProper
         Property->IsA<FStrProperty>() || Property->IsA<FEnumProperty>();
 }
 
-bool FRetainedBlueprintGeneration::CanInitializeDefaultSetterBeforeEngineStartup(FProperty* Property, UObject* DefaultOwner, const FString& SetterName, bool bKeepAssetReferences)
+bool FRetainedBlueprintGeneration::CanInitializeDefaultSetterBeforeEngineStartup(FProperty* Property, UObject* DefaultOwner, const FString& SetterName)
 {
     UActorComponent* Component = Cast<UActorComponent>(DefaultOwner);
     if (!Property || !Component || !Component->IsTemplate() || Component->IsRegistered() ||
@@ -278,7 +275,7 @@ bool FRetainedBlueprintGeneration::CanInitializeDefaultSetterBeforeEngineStartup
         }
         return SenseClass->HasAnyClassFlags(CLASS_Native) && SenseClass->IsChildOf(UAISense::StaticClass()) &&
             SenseClass->GetOutermost()->GetName() == TEXT("/Script/AIModule") &&
-            CanInitializeValueBeforeEngineStartup(Property, PropertyMemory, bKeepAssetReferences);
+            CanInitializeValueBeforeEngineStartup(Property, PropertyMemory);
     }
     const bool bKnownSceneClass = ComponentClass == USceneComponent::StaticClass() ||
         ComponentClass == UStaticMeshComponent::StaticClass() || ComponentClass == USkinnedMeshComponent::StaticClass() ||
@@ -308,7 +305,7 @@ bool FRetainedBlueprintGeneration::CanInitializeDefaultSetterBeforeEngineStartup
         (SetterName == TEXT("SetRelativeTransform") && PropertyName == TEXT("RelativeTransform"));
     if (bRelativeTransformSetter)
     {
-        return CanInitializeValueBeforeEngineStartup(Property, PropertyMemory, bKeepAssetReferences);
+        return CanInitializeValueBeforeEngineStartup(Property, PropertyMemory);
     }
     const bool bNullAssetSetter =
         (SetterName == TEXT("SetDecalMaterial") && ComponentClass == UDecalComponent::StaticClass() && PropertyName == TEXT("DecalMaterial")) ||
@@ -328,11 +325,7 @@ bool FRetainedBlueprintGeneration::CanInitializeDefaultSetterBeforeEngineStartup
         {
             return false;
         }
-        if (bKeepAssetReferences)
-        {
-            return true;
-        }
-        return ObjectProperty->GetObjectPropertyValue(PropertyMemory) == nullptr;
+        return true;
     }
     return false;
 }
@@ -447,6 +440,14 @@ FString FRetainedBlueprintGeneration::RegisterRuntimeComponentTemplate(UActorCom
     return MemberName;
 }
 
+static FString GetFunctionLibraryAssetDefaults(UBlueprint* Blueprint)
+{
+    FString Expression = TEXT("GetDefault<") + UBlueprintNativizationLibrary::GetUniqueFieldName(Blueprint->GeneratedClass) + TEXT(">()");
+    Expression += TEXT("->") + UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(
+        TEXT("BlueprintLibraryAssetDefaults"), Blueprint->GeneratedClass) + TEXT(".Get()");
+    return Expression;
+}
+
 FString FRetainedBlueprintGeneration::GetAssetValue(UObject* Asset, UClass* ConstraintClass)
 {
     if (!Asset)
@@ -480,8 +481,7 @@ FString FRetainedBlueprintGeneration::GetAssetValue(UObject* Asset, UClass* Cons
     }
     if (OwningBlueprint->BlueprintType == BPTYPE_FunctionLibrary)
     {
-        return TEXT("GetDefault<") + UBlueprintNativizationLibrary::GetUniqueFieldName(OwningBlueprint->GeneratedClass) +
-            TEXT(">()->") + MemberName + TEXT(".Get()");
+        return GetFunctionLibraryAssetDefaults(OwningBlueprint) + TEXT("->") + MemberName + TEXT(".Get()");
     }
     return MemberName + TEXT(".Get()");
 }
@@ -556,17 +556,23 @@ UClass* FRetainedBlueprintGeneration::GetStorageClass(UClass* Class)
             Class = Class->GetSuperClass();
         }
     }
+    while (Class && Class->HasAnyClassFlags(CLASS_Native) &&
+        Class->GetMetaData(TEXT("ModuleRelativePath")).Replace(TEXT("\\"), TEXT("/")).StartsWith(TEXT("Private/")))
+    {
+        Class = Class->GetSuperClass();
+    }
     return Class;
 }
 
 FString FRetainedBlueprintGeneration::GetClassName(UClass* Class)
 {
     Class = FNativeGenerationContext::ResolveClass(Class);
-    if (IsRetained(Class))
+    UClass* StorageClass = GetStorageClass(Class);
+    if (StorageClass && StorageClass->HasAnyClassFlags(CLASS_Interface))
     {
-        RetainedClassDependencies.Add(Class);
+        return UBlueprintNativizationLibrary::GetUniqueUInterfaceFieldName(StorageClass);
     }
-    return UBlueprintNativizationLibrary::GetUniqueFieldName(GetStorageClass(Class));
+    return UBlueprintNativizationLibrary::GetUniqueFieldName(StorageClass);
 }
 
 FString FRetainedBlueprintGeneration::Quote(const FString& Value)
@@ -685,8 +691,9 @@ FString FRetainedBlueprintGeneration::GetClassValue(UClass* Class)
         return TEXT("nullptr");
     }
     UNativizationV2Subsystem* Subsystem = GEngine->GetEngineSubsystem<UNativizationV2Subsystem>();
-    if (Class && !Class->HasAnyClassFlags(CLASS_Native) && Subsystem->LeftAllAssetRefInBlueprint &&
-        !(FNativeGenerationContext::bGeneratingClassFilter && !IsRetained(FNativeGenerationContext::ResolveClass(Class))))
+    const bool bTypeIdentity = Class && (FNativeGenerationContext::bGeneratingClassFilter ||
+        Class->HasAnyClassFlags(CLASS_Interface));
+    if (Class && !Class->HasAnyClassFlags(CLASS_Native) && !(bTypeIdentity && !IsRetained(FNativeGenerationContext::ResolveClass(Class))))
     {
         if (!OwningBlueprint ||
             FNativeGenerationContext::bGeneratingInlineDefaults || bGeneratingConstructor)
@@ -704,8 +711,7 @@ FString FRetainedBlueprintGeneration::GetClassValue(UClass* Class)
         }
         if (OwningBlueprint->BlueprintType == BPTYPE_FunctionLibrary)
         {
-            return TEXT("GetDefault<") + UBlueprintNativizationLibrary::GetUniqueFieldName(OwningBlueprint->GeneratedClass) +
-                TEXT(">()->") + MemberName + TEXT(".Get()");
+            return GetFunctionLibraryAssetDefaults(OwningBlueprint) + TEXT("->") + MemberName + TEXT(".Get()");
         }
         return MemberName + TEXT(".Get()");
     }
@@ -716,23 +722,8 @@ FString FRetainedBlueprintGeneration::GetClassValue(UClass* Class)
         {
             return TEXT("LoadClass<UObject>(nullptr, ") + Quote(Class->GetPathName()) + TEXT(")");
         }
-        RetainedClassDependencies.Add(Class);
-        if (OwningBlueprint && !FNativeGenerationContext::bGeneratingInlineDefaults)
-        {
-            FString& MemberName = CachedClassMembers.FindOrAdd(Class);
-            if (MemberName.IsEmpty())
-            {
-                MemberName = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(
-                    TEXT("CachedClass") + Class->GetName(), OwningBlueprint->GeneratedClass, Class->GetPathName());
-            }
-            if (OwningBlueprint->BlueprintType == BPTYPE_FunctionLibrary)
-            {
-                return TEXT("GetDefault<") + UBlueprintNativizationLibrary::GetUniqueFieldName(OwningBlueprint->GeneratedClass) +
-                    TEXT(">()->") + MemberName + TEXT(".Get()");
-            }
-            return MemberName + TEXT(".Get()");
-        }
-        return TEXT("LoadClass<UObject>(nullptr, ") + Quote(Class->GetPathName()) + TEXT(")");
+        FNativeApiCatalog::AddError(TEXT("Cannot emit an asset class without its serialized Blueprint property: ") + Class->GetPathName());
+        return TEXT("nullptr");
     }
     if (Class && FNativeGenerationContext::bGeneratingInlineDefaults)
     {
@@ -747,6 +738,12 @@ FString FRetainedBlueprintGeneration::GetClassValue(UClass* Class)
     FString Include;
     if (CanUseStaticClass(Class, Include))
     {
+        if (Class->HasAnyClassFlags(CLASS_Native))
+        {
+            FStructTranslationResult Requirements;
+            Requirements.ModuleDependencies.Add(Class->GetOutermost()->GetName().RightChop(8));
+            FNativeGenerationContext::AddRequirements(Requirements);
+        }
         if (!Include.IsEmpty())
         {
             FNativeGenerationContext::AddImplementationInclude(Include);
@@ -766,8 +763,7 @@ void FRetainedBlueprintGeneration::RegisterFunctionLibraryDependency(UClass* Cla
     {
         Class = Blueprint->GeneratedClass;
     }
-    if (!Class || !GeneratedBlueprintClasses.Contains(Class) ||
-        !GEngine->GetEngineSubsystem<UNativizationV2Subsystem>()->LeftAllAssetRefInBlueprint)
+    if (!Class || !GeneratedBlueprintClasses.Contains(Class))
     {
         return;
     }
@@ -781,9 +777,7 @@ void FRetainedBlueprintGeneration::BeginObject(UBlueprint* Blueprint)
 {
     OwningBlueprint = Blueprint;
     ComponentTemplateMembers.Reset();
-    ComponentTemplateInitializations.Reset();
     AssetClassMembers.Reset();
-    CachedClassMembers.Reset();
     InstanceInitialization.Reset();
     AssetObjectMembers.Reset();
     AssetObjectConstraints.Reset();
@@ -794,7 +788,6 @@ void FRetainedBlueprintGeneration::BeginObject(UBlueprint* Blueprint)
     ComponentInstanceTemplates.Reset();
     InheritedComponentInstanceTemplates.Reset();
     bRetainedReflectionUsed = false;
-    RetainedClassDependencies.Reset();
     InstancedObjectNames.Reset();
     ConstructingObjects.Reset();
     ConstructedClasses.Reset();
@@ -827,13 +820,9 @@ FString FRetainedBlueprintGeneration::RegisterComponentTemplate(UActorComponent*
     return MemberName;
 }
 
-void FRetainedBlueprintGeneration::SetComponentTemplateInitialization(UActorComponent* Component, const FString& Initialization)
-{
-    ComponentTemplateInitializations.Add(Component, Initialization);
-}
 
 FString FRetainedBlueprintGeneration::ConstructInstancedObject(FObjectPropertyBase* Property, UObject* Object,
-    const FString& Outer, bool bKeepAssetReferences, bool bArchetypeTemplate)
+    const FString& Outer, bool bArchetypeTemplate)
 {
     if (const FString* ExistingInstance = ConstructingObjects.Find(Object))
     {
@@ -892,13 +881,12 @@ FString FRetainedBlueprintGeneration::ConstructInstancedObject(FObjectPropertyBa
         void* ValueAddress = DefaultProperty->ContainerPtrToValuePtr<void>(Object);
         if (UBlueprintNativizationLibrary::IsAvailibleOneLineDefaultConstructorForProperty(DefaultProperty))
         {
-            Value = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(DefaultProperty,
-                bKeepAssetReferences, ValueAddress, InstanceName);
+            Value = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(DefaultProperty, ValueAddress, InstanceName);
         }
         else
         {
             Code += UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForProperty(DefaultProperty,
-                ValueAddress, nullptr, Subsystem->EntryNodes, InstanceClass, true, bKeepAssetReferences, TEXT(""), Value, InstanceName);
+                ValueAddress, nullptr, Subsystem->EntryNodes, InstanceClass, true, TEXT(""), Value, InstanceName);
         }
         FGetterAndSetterPropertyDescriptor Descriptor;
         UBlueprintNativizationSettingsLibrary::FindGetterAndSetterDescriptorDescriptorByProperty(DefaultProperty, Descriptor);
@@ -930,8 +918,7 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
     FString AdditionalIncludes;
     const FString RuntimeModuleName = UBlueprintNativizationSettingsLibrary::GetModuleName();
     const FString SubsystemRuntimeClass = TEXT("F") + RuntimeModuleName + TEXT("SubsystemRuntime");
-    const bool bLibraryAssetBridge = Subsystem->LeftAllAssetRefInBlueprint &&
-        Blueprint->BlueprintType == BPTYPE_FunctionLibrary &&
+    const bool bLibraryAssetBridge = Blueprint->BlueprintType == BPTYPE_FunctionLibrary &&
         (!AssetClassMembers.IsEmpty() || !AssetObjectMembers.IsEmpty());
     if (bLibraryAssetBridge)
     {
@@ -950,7 +937,6 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
         else
         {
             FString Declarations;
-            FString Initialization;
             TArray<UActorComponent*> Templates;
             ComponentTemplateMembers.GetKeys(Templates);
             Templates.Sort([](const UActorComponent& First, const UActorComponent& Second)
@@ -961,10 +947,7 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
             {
                 const FString& MemberName = ComponentTemplateMembers.FindChecked(Component);
                 Declarations += TEXT("\nUPROPERTY()\nTObjectPtr<UObject> ") + MemberName + TEXT(";\n");
-                if (!Subsystem->LeftAllAssetRefInBlueprint)
-                {
-                    Initialization += ComponentTemplateInitializations.FindChecked(Component);
-                }
+
             }
             Header.InsertAt(Body + FString(TEXT("GENERATED_BODY()")).Len(), Declarations);
             const int32 HeaderInclude = Header.Find(TEXT("#include"));
@@ -981,7 +964,6 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
         }
     }
     FString CachedClassDeclarations;
-    FString CachedClassInitialization;
     TArray<FString> InstanceTemplateMembers;
     for (const TPair<FString, FString>& Template : ComponentInstanceTemplates)
     {
@@ -1028,10 +1010,7 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
         FStructTranslationResult Requirements;
         Requirements.ModuleDependencies.Add(ConstraintClass->GetOutermost()->GetName().RightChop(8));
         FNativeGenerationContext::AddRequirements(Requirements);
-        if (!Subsystem->LeftAllAssetRefInBlueprint)
-        {
-            CachedClassInitialization += MemberName + TEXT(" = LoadObject<") + Type + TEXT(">(nullptr, ") + Quote(Asset->GetPathName()) + TEXT(");\n");
-        }
+
     }
     TArray<UActorComponent*> RuntimeTemplates;
     RuntimeComponentTemplates.GetKeys(RuntimeTemplates);
@@ -1046,31 +1025,7 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
             CachedClassDeclarations += TEXT("\nprotected:\nUPROPERTY()\nTObjectPtr<UObject> ") + RuntimeComponentTemplates.FindChecked(Component) + TEXT(";\nprivate:\n");
         }
     }
-    if (!Subsystem->LeftAllAssetRefInBlueprint)
-    {
-        TArray<UClass*> Dependencies = RetainedClassDependencies.Array();
-        Dependencies.Sort([](const UClass& FirstClass, const UClass& SecondClass)
-        {
-            return FirstClass.GetPathName() < SecondClass.GetPathName();
-        });
-        for (UClass* Class : Dependencies)
-        {
-            Class = FNativeGenerationContext::ResolveClass(Class);
-            if (!Class->HasAnyClassFlags(CLASS_Native) && Class->GetOutermost() == GetTransientPackage())
-            {
-                FNativeApiCatalog::AddError(TEXT("Cannot export a transient Blueprint class dependency without its authoritative asset class: ") + Class->GetPathName());
-                continue;
-            }
-            FString& MemberName = CachedClassMembers.FindOrAdd(Class);
-            if (MemberName.IsEmpty())
-            {
-                MemberName = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(
-                    TEXT("CachedClass") + Class->GetName(), Blueprint->GeneratedClass);
-            }
-            CachedClassDeclarations += TEXT("\nUPROPERTY()\nTSubclassOf<UObject> ") + MemberName + TEXT(";\n");
-            CachedClassInitialization += MemberName + TEXT(" = LoadClass<UObject>(nullptr, ") + Quote(Class->GetPathName()) + TEXT(");\n");
-        }
-    }
+
     if (!CachedClassDeclarations.IsEmpty())
     {
         const int32 Body = Header.Find(TEXT("GENERATED_BODY()"));
@@ -1113,18 +1068,8 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
         Header.InsertAt(Header.Find(TEXT("GENERATED_BODY()")) + FString(TEXT("GENERATED_BODY()")).Len(),
             TEXT("\npublic:\nvirtual bool ShouldCreateSubsystem(UObject* Outer) const override;\nprivate:\n"));
         Source += TEXT("\nbool ") + ClassName + TEXT("::ShouldCreateSubsystem(UObject* Outer) const\n{\n");
-        FString KeepAssetReferencesArgument = TEXT("false");
-        if (Subsystem->LeftAllAssetRefInBlueprint)
-        {
-            KeepAssetReferencesArgument = TEXT("true");
-        }
-        else
-        {
-            Source += TEXT("if (UObject::GetClass()->GetPathName() == ") + Quote(Blueprint->GeneratedClass->GetPathName()) + TEXT(")\n{\nreturn false;\n}\n");
-        }
         Source += TEXT("return ") + SubsystemRuntimeClass + TEXT("::ShouldCreateSubsystem(this, Outer, ") +
-            ClassName + TEXT("::StaticClass(), ") + KeepAssetReferencesArgument + TEXT(") && Super::ShouldCreateSubsystem(Outer);\n}\n");
-        if (Subsystem->LeftAllAssetRefInBlueprint)
+            ClassName + TEXT("::StaticClass()) && Super::ShouldCreateSubsystem(Outer);\n}\n");
         {
             const FString PostLoadPrefix = TEXT("\nvoid ") + ClassName + TEXT("::PostLoad()\n{\nSuper::PostLoad();\n");
             const int32 PostLoadPosition = Source.Find(PostLoadPrefix, ESearchCase::CaseSensitive);
@@ -1186,6 +1131,11 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
     }
     if (!AssetClassDeclarations.IsEmpty())
     {
+        const FString TemplateInclude = TEXT("#include \"Templates/SubclassOf.h\"");
+        if (!Header.Contains(TemplateInclude))
+        {
+            Header.InsertAt(Header.Find(TEXT("#include")), TemplateInclude + TEXT("\n"));
+        }
         const int32 Body = Header.Find(TEXT("GENERATED_BODY()"));
         if (Body == INDEX_NONE)
         {
@@ -1201,6 +1151,8 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
         const FString ClassName = UBlueprintNativizationLibrary::GetUniqueFieldName(Blueprint->GeneratedClass);
         const FString MethodName = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(
             TEXT("RefreshBlueprintLibraryAssets"), Blueprint->GeneratedClass);
+        const FString DefaultsMember = UBlueprintNativizationLibrary::GetLambdaUniqueVariableNameByClass(
+            TEXT("BlueprintLibraryAssetDefaults"), Blueprint->GeneratedClass);
         const FString& DataClassMember = AssetClassMembers.FindChecked(Blueprint->GeneratedClass);
         const int32 Body = Header.Find(TEXT("GENERATED_BODY()"));
         const FString PostLoadPrefix = TEXT("\nvoid ") + ClassName + TEXT("::PostLoad()\n{\nSuper::PostLoad();\n");
@@ -1218,22 +1170,12 @@ void FRetainedBlueprintGeneration::Complete(UBlueprint* Blueprint, FString& Head
             {
                 Declarations += TEXT("virtual void PostLoad() override;\n");
             }
-            Header.InsertAt(Body + FString(TEXT("GENERATED_BODY()")).Len(), Declarations + TEXT("private:\n"));
-            FString Assignment;
-            for (UObject* Asset : Assets)
-            {
-                const FString& MemberName = AssetObjectMembers.FindChecked(Asset);
-                Assignment += TEXT("NativeDefaults->") + MemberName + TEXT(" = ") + MemberName + TEXT(";\n");
-            }
-            for (UClass* AssetClass : AssetClasses)
-            {
-                const FString& MemberName = AssetClassMembers.FindChecked(AssetClass);
-                Assignment += TEXT("NativeDefaults->") + MemberName + TEXT(" = ") + MemberName + TEXT(";\n");
-            }
+            Header.InsertAt(Body + FString(TEXT("GENERATED_BODY()")).Len(), Declarations +
+                TEXT("private:\nUPROPERTY(Transient)\nTObjectPtr<") + ClassName + TEXT("> ") + DefaultsMember + TEXT(";\n"));
             Source += TEXT("\nvoid ") + ClassName + TEXT("::") + MethodName +
                 TEXT("()\n{\nif (!HasAnyFlags(RF_ClassDefaultObject) || UObject::GetClass() != ") + DataClassMember +
                 TEXT(".Get() || UObject::GetClass() == StaticClass())\n{\nreturn;\n}\n") +
-                TEXT("auto* NativeDefaults = GetMutableDefault<") + ClassName + TEXT(">();\n") + Assignment + TEXT("}\n");
+                TEXT("GetMutableDefault<") + ClassName + TEXT(">()->") + DefaultsMember + TEXT(" = this;\n}\n");
             if (PostLoadPosition == INDEX_NONE)
             {
                 Source += PostLoadPrefix + MethodName + TEXT("();\n}\n");
@@ -1283,6 +1225,47 @@ bool FRetainedBlueprintGeneration::UsesReflection(UFunction* Function, UClass* C
         }
     }
     return false;
+}
+
+bool FRetainedBlueprintGeneration::TryGenerateNativeCall(UFunction* Function, const FString& Target,
+    const TArray<FString>& Arguments, FString& Invocation)
+{
+    if (!Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Native) || !FNativeApiCatalog::CanCallFunctionDirectly(Function))
+    {
+        return false;
+    }
+    const auto Callable = FNativeApiCatalog::ResolveCallable(Function);
+    FStructTranslationResult Requirements;
+    FNativeGenerationContext::AddImplementationInclude(TEXT("#include \"") + Callable->GetStringField(TEXT("Include")) + TEXT("\""));
+    Requirements.ModuleDependencies.Add(Callable->GetStringField(TEXT("Module")));
+    FNativeGenerationContext::AddRequirements(Requirements);
+    FString Receiver = Target + TEXT("->");
+    FString MethodName = Function->GetName();
+    TArray<FString> CallArguments = Arguments;
+    if (Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface))
+    {
+        const FString InterfaceName = UBlueprintNativizationLibrary::GetUniqueIInterfaceFieldName(Function->GetOwnerClass());
+        if (Function->HasAnyFunctionFlags(FUNC_Event))
+        {
+            Receiver = InterfaceName + TEXT("::");
+            MethodName = TEXT("Execute_") + MethodName;
+            CallArguments.Insert(Target, 0);
+        }
+        else if (Function->HasAnyFunctionFlags(FUNC_Static))
+        {
+            Receiver = InterfaceName + TEXT("::");
+        }
+        else
+        {
+            Receiver = TEXT("Cast<") + InterfaceName + TEXT(">(") + Target + TEXT(")->");
+        }
+    }
+    else if (Function->HasAnyFunctionFlags(FUNC_Static))
+    {
+        Receiver = GetClassName(Function->GetOwnerClass()) + TEXT("::");
+    }
+    Invocation = Receiver + MethodName + TEXT("(") + FString::Join(CallArguments, TEXT(", ")) + TEXT(")");
+    return true;
 }
 
 static FString GetReflectedValueType(FProperty* Property)
@@ -1538,7 +1521,14 @@ FString FRetainedBlueprintGeneration::Transfer(FProperty* Property, const FStrin
                 const FString MemberProperty = TEXT("MemberProperty") + Suffix;
                 const FString MemberAddress = TEXT("MemberAddress") + Suffix;
                 const FString MemberValue = TEXT("MemberValue") + Suffix;
-                Code += TEXT("{\nFProperty* ") + MemberProperty + TEXT(" = FindFProperty<FProperty>(CastFieldChecked<FStructProperty>(") + Descriptor + TEXT(")->Struct, ") + Quote(Member->GetName()) + TEXT(");\n");
+                const FString NativeMemberName = UBlueprintNativizationLibrary::GetUniquePropertyName(*Member);
+                Code += TEXT("{\nFProperty* ") + MemberProperty + TEXT(" = FindFProperty<FProperty>(CastFieldChecked<FStructProperty>(") + Descriptor + TEXT(")->Struct, ") + Quote(NativeMemberName) + TEXT(");\n");
+                if (NativeMemberName != Member->GetName())
+                {
+                    Code += TEXT("if (!") + MemberProperty + TEXT(")\n{\n") + MemberProperty +
+                        TEXT(" = FindFProperty<FProperty>(CastFieldChecked<FStructProperty>(") + Descriptor + TEXT(")->Struct, ") +
+                        Quote(Member->GetName()) + TEXT(");\n}\n");
+                }
                 Code += TEXT("check(") + MemberProperty + TEXT(");\nvoid* ") + MemberAddress + TEXT(" = ") + MemberProperty + TEXT("->ContainerPtrToValuePtr<void>(") + Address + TEXT(");\n");
                 Code += TEXT("auto& ") + MemberValue + TEXT(" = ") + Value + TEXT(".") + UBlueprintNativizationLibrary::GetUniquePropertyName(*Member) + TEXT(";\n");
                 Code += Transfer(*Member, MemberProperty, MemberAddress, MemberValue, bWrite);
@@ -1557,16 +1547,26 @@ FString FRetainedBlueprintGeneration::Transfer(FProperty* Property, const FStrin
     {
         if (bWrite)
         {
-            return Descriptor + TEXT("->CopySingleValue(") + Address + TEXT(", &") + Value + TEXT(");\n");
+            const FString TransferValue = GetTransferVariableName(TEXT("TransferredValue"));
+            return TEXT("{\nconst ") + Type + TEXT(" ") + TransferValue + TEXT("(") + Value + TEXT(");\n") +
+                Descriptor + TEXT("->CopySingleValue(") + Address + TEXT(", &") + TransferValue + TEXT(");\n}\n");
         }
         return Descriptor + TEXT("->CopySingleValue(&") + Value + TEXT(", ") + Address + TEXT(");\n");
     }
     else if (Property->IsA<FNumericProperty>() || Property->IsA<FEnumProperty>())
     {
         FString Numeric = TEXT("CastFieldChecked<FNumericProperty>(") + Descriptor + TEXT(")");
-        if (Property->IsA<FEnumProperty>())
+        FString NumericSetup;
+        FString NumericEnd;
+        const FByteProperty* ByteProperty = CastField<FByteProperty>(Property);
+        if (Property->IsA<FEnumProperty>() || (ByteProperty && ByteProperty->Enum))
         {
-            Numeric = TEXT("CastFieldChecked<FEnumProperty>(") + Descriptor + TEXT(")->GetUnderlyingProperty()");
+            Numeric = GetTransferVariableName(TEXT("NumericProperty"));
+            const FString Enumeration = GetTransferVariableName(TEXT("EnumProperty"));
+            NumericSetup = TEXT("{\nFNumericProperty* ") + Numeric + TEXT(" = CastField<FNumericProperty>(") + Descriptor + TEXT(");\n") +
+                TEXT("if (FEnumProperty* ") + Enumeration + TEXT(" = CastField<FEnumProperty>(") + Descriptor + TEXT("))\n{\n") +
+                Numeric + TEXT(" = ") + Enumeration + TEXT("->GetUnderlyingProperty();\n}\ncheck(") + Numeric + TEXT(");\n");
+            NumericEnd = TEXT("}\n");
         }
         FNumericProperty* Number = CastField<FNumericProperty>(Property);
         const bool bFloating = Number && Number->IsFloatingPoint();
@@ -1574,9 +1574,9 @@ FString FRetainedBlueprintGeneration::Transfer(FProperty* Property, const FStrin
         {
             if (bFloating)
             {
-                return Numeric + TEXT("->SetFloatingPointPropertyValue(") + Address + TEXT(", static_cast<double>(") + Value + TEXT("));\n");
+                return NumericSetup + Numeric + TEXT("->SetFloatingPointPropertyValue(") + Address + TEXT(", static_cast<double>(") + Value + TEXT("));\n") + NumericEnd;
             }
-            return Numeric + TEXT("->SetIntPropertyValue(") + Address + TEXT(", static_cast<uint64>(") + Value + TEXT("));\n");
+            return NumericSetup + Numeric + TEXT("->SetIntPropertyValue(") + Address + TEXT(", static_cast<uint64>(") + Value + TEXT("));\n") + NumericEnd;
         }
         FString Getter = TEXT("GetSignedIntPropertyValue");
         if (bFloating)
@@ -1593,6 +1593,7 @@ FString FRetainedBlueprintGeneration::Transfer(FProperty* Property, const FStrin
             NumericValue = TEXT("static_cast<uint8>(") + NumericValue + TEXT(")");
         }
         Read = TEXT("static_cast<") + Type + TEXT(">(") + NumericValue + TEXT(")");
+        return NumericSetup + Value + TEXT(" = ") + Read + TEXT(";\n") + NumericEnd;
     }
     else
     {
@@ -1642,6 +1643,83 @@ FString FRetainedBlueprintGeneration::WriteProperty(FProperty* Property, const F
     return Code + TEXT("}\n}\n}\n");
 }
 
+FString FRetainedBlueprintGeneration::CallPropertyAccessor(FProperty* Property, UFunction* Function,
+    const FString& Target, const FString& Value, bool bSetter)
+{
+    FString Name = UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, TEXT(""));
+    if (IsRetained(Function->GetOwnerClass()))
+    {
+        Name = Function->GetName();
+    }
+    const FString Type = GetReflectedValueType(Property);
+    TArray<FString> Arguments;
+    if (bSetter)
+    {
+        Arguments.Add(Value);
+    }
+    FString NativeInvocation;
+    if (TryGenerateNativeCall(Function, TEXT("AccessorTarget"), Arguments, NativeInvocation))
+    {
+        FString NativeCode = TEXT("([&]()");
+        if (!bSetter)
+        {
+            NativeCode += TEXT(" -> ") + Type;
+        }
+        NativeCode += TEXT("\n{\nconst auto AccessorTarget = ") + Target + TEXT(";\nif (IsValid(AccessorTarget))\n{\n");
+        if (bSetter)
+        {
+            NativeCode += NativeInvocation + TEXT(";\n}\n}())");
+        }
+        else
+        {
+            NativeCode += TEXT("return ") + NativeInvocation + TEXT(";\n}\nreturn {};\n}())");
+        }
+        return NativeCode;
+    }
+    FString Code = TEXT("([&]()");
+    if (!bSetter)
+    {
+        Code += TEXT(" -> ") + Type;
+    }
+    Code += TEXT("\n{\nUObject* AccessorTarget = ") + Target + TEXT(";\n");
+    if (!bSetter)
+    {
+        Code += Type + TEXT(" AccessorValue{};\n");
+    }
+    Code += TEXT("if (IsValid(AccessorTarget))\n{\nif (UFunction* AccessorFunction = AccessorTarget->FindFunction(") + Quote(Name) +
+        TEXT("))\n{\nFStructOnScope AccessorParameters(AccessorFunction);\n");
+    FProperty* Parameter = Function->GetReturnProperty();
+    if (bSetter)
+    {
+        for (TFieldIterator<FProperty> Candidate(Function); Candidate; ++Candidate)
+        {
+            if (Candidate->HasAnyPropertyFlags(CPF_Parm) && !Candidate->HasAnyPropertyFlags(CPF_ReturnParm))
+            {
+                Parameter = *Candidate;
+                break;
+            }
+        }
+    }
+    Code += TEXT("FProperty* AccessorParameter = FindFProperty<FProperty>(AccessorFunction, ") + Quote(Parameter->GetName()) +
+        TEXT(");\nvoid* AccessorAddress = AccessorParameter->ContainerPtrToValuePtr<void>(AccessorParameters.GetStructMemory());\n");
+    if (bSetter)
+    {
+        Code += Type + TEXT(" const& AccessorValue = ") + Value + TEXT(";\n") +
+            Transfer(Property, TEXT("AccessorParameter"), TEXT("AccessorAddress"), TEXT("AccessorValue"), true);
+    }
+    Code += TEXT("AccessorTarget->ProcessEvent(AccessorFunction, AccessorParameters.GetStructMemory());\n");
+    if (!bSetter)
+    {
+        Code += Transfer(Property, TEXT("AccessorParameter"), TEXT("AccessorAddress"), TEXT("AccessorValue"), false);
+    }
+    Code += TEXT("}\n}\n");
+    if (!bSetter)
+    {
+        Code += TEXT("return AccessorValue;\n");
+    }
+    return Code + TEXT("}())");
+}
+
 FGenerateResultStruct FRetainedBlueprintGeneration::Call(UK2Node_CallFunction* Node, const FString& Target,
     TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem)
 {
@@ -1675,7 +1753,8 @@ FGenerateResultStruct FRetainedBlueprintGeneration::Call(UK2Node_CallFunction* N
     {
         FProperty* Property = *Parameter;
         const bool bReturn = Property->HasAnyPropertyFlags(CPF_ReturnParm);
-        const bool bWriteBack = !bReturn && Property->HasAnyPropertyFlags(CPF_OutParm) && !Property->HasAnyPropertyFlags(CPF_ConstParm);
+        const bool bReadOnlyClassFilter = FNativeFunctionExpressions::IsClassFilterParameter(Function, Property->GetFName());
+        const bool bWriteBack = !bReadOnlyClassFilter && !bReturn && Property->HasAnyPropertyFlags(CPF_OutParm) && !Property->HasAnyPropertyFlags(CPF_ConstParm);
         UEdGraphPin* InputPin = Node->FindPin(Property->GetFName(), EGPD_Input);
         UEdGraphPin* OutputPin = Node->FindPin(Property->GetFName(), EGPD_Output);
         const FString LocalName = Subsystem->GetNodeStateName(Node, TEXT("Argument") + Property->GetName());
@@ -1804,6 +1883,14 @@ FGenerateResultStruct FRetainedBlueprintGeneration::Call(UK2Node_CallFunction* N
                 }
             }
             InputValues += LocalType + TEXT(" ") + LocalName + TEXT(" = ") + InputCode + TEXT(";\n");
+            if (bReadOnlyClassFilter && InputPin->PinType.IsArray())
+            {
+                const FString ElementName = LocalName + TEXT("FilterClass");
+                const FString Resolved = ResolveClassFilterValue(ElementName,
+                    Cast<UClass>(InputPin->PinType.PinSubCategoryObject.Get()));
+                InputValues += TEXT("for (auto& ") + ElementName + TEXT(" : ") + LocalName + TEXT(")\n{\n") +
+                    ElementName + TEXT(" = ") + Resolved + TEXT(";\n}\n");
+            }
             InputTransfers += TEXT("{\n") + Lookup + Transfer(Property, DescriptorName, AddressName, LocalName, true) + TEXT("}\n");
         }
         else if (!bReturn && OutputPin)
@@ -1849,7 +1936,16 @@ FGenerateResultStruct FRetainedBlueprintGeneration::Call(UK2Node_CallFunction* N
     if (Function->HasAnyFunctionFlags(FUNC_Static))
     {
         const FString ReceiverClassName = ReceiverName + TEXT("Class");
-        ReceiverPreparation = TEXT("UClass* ") + ReceiverClassName + TEXT(" = ") + GetClassValue(Function->GetOwnerClass()) +
+        FString ReceiverClass;
+        if (Function->GetOwnerClass()->HasAnyClassFlags(CLASS_Native))
+        {
+            ReceiverClass = TEXT("LoadClass<UObject>(nullptr, ") + Quote(Function->GetOwnerClass()->GetPathName()) + TEXT(")");
+        }
+        else
+        {
+            ReceiverClass = GetClassValue(Function->GetOwnerClass());
+        }
+        ReceiverPreparation = TEXT("UClass* ") + ReceiverClassName + TEXT(" = ") + ReceiverClass +
             TEXT(";\nUObject* ") + ReceiverName + TEXT("{};\nif (") + ReceiverClassName + TEXT(")\n{\n") +
             ReceiverName + TEXT(" = ") + ReceiverClassName + TEXT("->GetDefaultObject();\n}\n");
     }
@@ -1885,6 +1981,38 @@ void FRetainedBlueprintGeneration::PrepareNativeArguments(UK2Node_CallFunction* 
     for (TFieldIterator<FProperty> Parameter(Function); Parameter && Parameter->HasAnyPropertyFlags(CPF_Parm); ++Parameter)
     {
         UEdGraphPin* Input = Node->FindPin(Parameter->GetFName(), EGPD_Input);
+        UEdGraphPin* Output = Node->FindPin(Parameter->GetFName(), EGPD_Output);
+        if (!Input && Output && Parameter->HasAnyPropertyFlags(CPF_OutParm) &&
+            !Parameter->HasAnyPropertyFlags(CPF_ReturnParm | CPF_ConstParm) &&
+            Output->PinType.PinCategory == UEdGraphSchema_K2::PC_Object)
+        {
+            FProperty* ValueProperty = *Parameter;
+            if (FArrayProperty* OutputArray = CastField<FArrayProperty>(ValueProperty))
+            {
+                ValueProperty = OutputArray->Inner;
+            }
+            FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(ValueProperty);
+            UClass* OutputClass = Cast<UClass>(Output->PinType.PinSubCategoryObject.Get());
+            if (ObjectProperty && !ValueProperty->IsA<FClassProperty>() && OutputClass &&
+                OutputClass != ObjectProperty->PropertyClass && OutputClass->IsChildOf(ObjectProperty->PropertyClass) &&
+                (Output->PinType.IsArray() || !Output->PinType.IsContainer()))
+            {
+                const FString ArgumentName = Subsystem->GetNodeStateName(Node, Parameter->GetName() + TEXT("NativeOutput"), true);
+                const FString OutputName = UBlueprintNativizationLibrary::GetUniquePinName(Output, Subsystem->EntryNodes);
+                Before += GetReflectedValueType(*Parameter) + TEXT(" ") + ArgumentName + TEXT("{};\n");
+                Overrides.Add(Parameter->GetFName(), ArgumentName);
+                if (Output->PinType.IsArray())
+                {
+                    After += OutputName + TEXT(".Reset();\nfor (auto* Element : ") + ArgumentName + TEXT(")\n{\n") +
+                        OutputName + TEXT(".Add(Cast<") + GetClassName(OutputClass) + TEXT(">(Element));\n}\n");
+                }
+                else
+                {
+                    After += OutputName + TEXT(" = Cast<") + GetClassName(OutputClass) + TEXT(">(") + ArgumentName + TEXT(");\n");
+                }
+                continue;
+            }
+        }
         if (!Input || Input->LinkedTo.IsEmpty())
         {
             continue;

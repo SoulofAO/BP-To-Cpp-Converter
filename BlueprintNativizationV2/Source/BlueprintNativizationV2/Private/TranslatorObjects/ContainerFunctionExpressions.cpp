@@ -182,9 +182,19 @@ FString UCallFunctionTranslatorObject::GenerateStaticFunctionCall(UFunction* Fun
     {
         return TEXT("([](UDataTable* Table, FName RowName, auto& Row)\n{\nusing RowType = typename TDecay<decltype(Row)>::Type;\nif (Table && Table->GetRowStruct() && Table->GetRowStruct()->IsChildOf(RowType::StaticStruct()))\n{\nreturn UDataTableFunctionLibrary::Generic_GetDataTableRowFromName(Table, RowName, &Row);\n}\nreturn false;\n})(") + Arguments + TEXT(")");
     }
-    if (Owner->GetName() == TEXT("GameplayStatics") && Function->GetFName() == TEXT("GetAllActorsOfClass"))
+    if (Owner->GetName() == TEXT("GameplayStatics") &&
+        (Function->GetFName() == TEXT("GetAllActorsOfClass") || Function->GetFName() == TEXT("GetAllActorsOfClassWithTag")))
     {
-        return TEXT("[](const UObject* Context, TSubclassOf<AActor> ActorClass, auto& Result)\n{\nTArray<AActor*> FoundActors;\nUGameplayStatics::GetAllActorsOfClass(Context, ActorClass, FoundActors);\nResult.Reset();\nusing ElementType = typename TDecay<decltype(Result)>::Type::ElementType;\nusing ActorType = typename TRemovePointer<ElementType>::Type;\nfor (AActor* Actor : FoundActors)\n{\nif (ActorType* TypedActor = Cast<ActorType>(Actor))\n{\nResult.Add(TypedActor);\n}\n}\n}( ") + Arguments + TEXT(")");
+        FString TagParameter;
+        FString Invocation = TEXT("UGameplayStatics::GetAllActorsOfClass(Context, ActorClass, FoundActors);");
+        if (Function->GetFName() == TEXT("GetAllActorsOfClassWithTag"))
+        {
+            TagParameter = TEXT(", FName ActorTag");
+            Invocation = TEXT("UGameplayStatics::GetAllActorsOfClassWithTag(Context, ActorClass, ActorTag, FoundActors);");
+        }
+        return TEXT("[](const UObject* Context, TSubclassOf<AActor> ActorClass") + TagParameter +
+            TEXT(", auto& Result)\n{\nTArray<AActor*> FoundActors;\n") + Invocation +
+            TEXT("\nResult.Reset();\nusing ElementType = typename TDecay<decltype(Result)>::Type::ElementType;\nusing ActorType = typename TRemovePointer<ElementType>::Type;\nfor (AActor* Actor : FoundActors)\n{\nif (ActorType* TypedActor = Cast<ActorType>(Actor))\n{\nResult.Add(TypedActor);\n}\n}\n}( ") + Arguments + TEXT(")");
     }
     return UBlueprintNativizationLibrary::GetUniqueFieldName(Owner) + TEXT("::") +
         UBlueprintNativizationLibrary::GetUniqueFunctionName(Function, TEXT("")) + TEXT("(") + Arguments + TEXT(")");

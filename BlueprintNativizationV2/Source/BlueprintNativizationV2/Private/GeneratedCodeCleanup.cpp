@@ -207,7 +207,7 @@ static TArray<FString> SplitGeneratedArguments(const FString& Arguments)
     return Result;
 }
 
-static FString RenameGeneratedParameters(const FString& Content, const TMap<FString, FString>& Names)
+FString FGeneratedCodeCleanup::RenameGeneratedParameters(const FString& Content, const TMap<FString, FString>& Names)
 {
     const TArray<FGeneratedToken> Tokens = TokenizeGeneratedCode(Content);
     FString Result = Content;

@@ -15,7 +15,7 @@ FString UWhileTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString Entr
     FGenerateResultStruct Condition;
     {
         TGuardValue<FString> EvaluationScope(Subsystem->InputEvaluationPurpose, TEXT("LoopCondition"));
-        TGuardValue<TMap<UK2Node*, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<UK2Node*, FGenerateResultStruct>());
+        TGuardValue<TMap<FString, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<FString, FGenerateResultStruct>());
         Condition = Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("Condition")), 0, MacroStack);
     }
     FString BodyCode;

@@ -83,7 +83,7 @@ FString UForLoopTranslatorObject::GenerateCodeFromNode(UK2Node* Node, FString En
     FGenerateResultStruct LastIndex;
     {
         TGuardValue<FString> EvaluationScope(Subsystem->InputEvaluationPurpose, TEXT("LoopCondition"));
-        TGuardValue<TMap<UK2Node*, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<UK2Node*, FGenerateResultStruct>());
+        TGuardValue<TMap<FString, FGenerateResultStruct>> CallScope(Subsystem->PureFunctionCalls, TMap<FString, FGenerateResultStruct>());
         LastIndex = Subsystem->GenerateInputParameterCodeForNode(Node, Node->FindPin(TEXT("LastIndex")), 0, MacroStack);
     }
     FString Content = GenerateNewPreparations(Preparations, FirstIndex.Preparations);

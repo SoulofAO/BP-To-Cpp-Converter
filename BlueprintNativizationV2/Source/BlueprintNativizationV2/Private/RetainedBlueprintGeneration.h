@@ -32,11 +32,10 @@ public:
     static void EndObject();
     static TMap<FString, FString> GetMigrationClassMembers();
     static FString RegisterComponentTemplate(UActorComponent* Component);
-    static void SetComponentTemplateInitialization(UActorComponent* Component, const FString& Initialization);
     static bool bGeneratingConstructor;
-    static bool CanInitializeValueBeforeEngineStartup(FProperty* Property, const void* PropertyMemory, bool bKeepAssetReferences, bool bInitializeExistingStructure = false);
-    static bool CanInitializeDefaultSetterBeforeEngineStartup(FProperty* Property, UObject* DefaultOwner, const FString& SetterName, bool bKeepAssetReferences);
-    static FString ConstructInstancedObject(FObjectPropertyBase* Property, UObject* Object, const FString& Outer, bool bKeepAssetReferences, bool bArchetypeTemplate = false);
+    static bool CanInitializeValueBeforeEngineStartup(FProperty* Property, const void* PropertyMemory, bool bInitializeExistingStructure = false);
+    static bool CanInitializeDefaultSetterBeforeEngineStartup(FProperty* Property, UObject* DefaultOwner, const FString& SetterName);
+    static FString ConstructInstancedObject(FObjectPropertyBase* Property, UObject* Object, const FString& Outer, bool bArchetypeTemplate = false);
     static void Complete(UBlueprint* Blueprint, FString& Header, FString& Source);
     static void PrepareNativeArguments(UK2Node_CallFunction* Node, TArray<UK2Node*> MacroStack,
         UNativizationV2Subsystem* Subsystem, TMap<FName, FString>& Overrides,
@@ -44,10 +43,12 @@ public:
     static FString WrapNativeCall(UFunction* Function, const FString& Invocation,
         const FString& Before, const FString& After);
     static bool UsesReflection(UFunction* Function, UClass* CallingClass = nullptr);
+    static bool TryGenerateNativeCall(UFunction* Function, const FString& Target, const TArray<FString>& Arguments, FString& Invocation);
     static FString ReadProperty(FProperty* Property, const FString& Target);
     static FString PreparePropertyRead(FProperty* Property, const FString& Target, UK2Node* Node,
         UNativizationV2Subsystem* Subsystem, FGenerationPreparations& Preparations);
     static FString WriteProperty(FProperty* Property, const FString& Target, const FString& Value);
+    static FString CallPropertyAccessor(FProperty* Property, UFunction* Function, const FString& Target, const FString& Value, bool bSetter);
     static FString Transfer(FProperty* Property, const FString& Descriptor, const FString& Address,
         const FString& Value, bool bWrite);
     static FGenerateResultStruct Call(UK2Node_CallFunction* Node, const FString& Target,

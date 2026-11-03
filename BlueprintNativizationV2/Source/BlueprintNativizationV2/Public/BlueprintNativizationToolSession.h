@@ -7,6 +7,8 @@
 #include "BlueprintNativizationSettings.h"
 #include "BlueprintNativizationToolSession.generated.h"
 
+class AActor;
+
 UCLASS()
 class BLUEPRINTNATIVIZATIONV2_API UBlueprintNativizationToolSession : public UObject
 {
@@ -30,6 +32,7 @@ public:
     void LoadSetup();
     void SaveSetup() const;
     bool IsModuleReady(FString& Reason) const;
+    bool IsPreparedModuleLoaded() const;
     bool CanExport(FString& Reason) const;
     FString GetPreparationReport(TSet<FString>* ReadySections = nullptr) const;
     bool ReviewNativeApi(FString& Report);
@@ -51,8 +54,6 @@ public:
     UPROPERTY(EditAnywhere, Category = "Input")
     bool bIncludeDependencies = false;
 
-    UPROPERTY()
-    bool bLeaveAssetReferencesInBlueprint = true;
 
     UPROPERTY(EditAnywhere, Category = "Output", meta = (ToolTip = "Plain text discards localization data. New readable keys require new or migrated translations and flatten text histories. Preserve retains all original text data and translation identity."))
     ETextGenerationMode TextGenerationMode = ETextGenerationMode::PreserveTextData;
@@ -73,7 +74,7 @@ public:
     bool bMergeWithExistingModule = false;
 
     UPROPERTY(EditAnywhere, Category = "Output")
-    bool bSaveMigrationCache = false;
+    bool bSaveMigrationCache = true;
 
     UPROPERTY(EditAnywhere, Category = "Output", meta = (EditCondition = "bSaveMigrationCache"))
     FDirectoryPath MigrationCacheFolder;
@@ -90,8 +91,13 @@ public:
 
     bool IsBusy() const;
     bool Generate();
+    UFUNCTION(BlueprintCallable, Category = "Blueprint Nativization")
     bool AnalyzeBlueprintCode();
+    UFUNCTION(BlueprintCallable, Category = "Blueprint Nativization")
+    static TArray<FString> InspectSourceActorComponents(AActor* Actor);
+    UFUNCTION(BlueprintCallable, Category = "Blueprint Nativization")
     bool TryFixBlueprintCode();
+    UFUNCTION(BlueprintCallable, Category = "Blueprint Nativization")
     FString GetBlueprintCodeAnalysisReport() const;
     bool IsBlueprintCodeAnalysisCurrent() const;
     bool IsBlueprintCodeAnalysisReady() const;

@@ -4,6 +4,7 @@
  * Copyright AO All Rights Reserved.
  */
 
+#include "EdGraphSchema_K2.h"
 #include "TranslatorObjects/BaseTranslatorObject.h"
 #include "BlueprintNativizationLibrary.h"
 #include "K2Node_MacroInstance.h"
@@ -11,6 +12,8 @@
 #include "K2Node_FunctionEntry.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "GenerationGraphContext.h"
+#include "BlueprintNativizationUniqueNameSubsystem.h"
+#include "Engine/Engine.h"
 
 void UTranslatorBPToCppObject::GenerateNewFunction(UK2Node* InputNode, TArray<UK2Node*> Path, TArray<FGenerateFunctionStruct>& EntryNodes, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
@@ -120,6 +123,11 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 	OutputPins = UBlueprintNativizationLibrary::GetParentPins(OutputPins);
 	for (UEdGraphPin* OutputPin : OutputPins)
 	{
+
+        if (GEngine->GetEngineSubsystem<UBlueprintNativizationUniqueNameSubsystem>()->IsPersistentPinVariable(OutputPin))
+        {
+            continue;
+        }
 		if (!Node->IsNodePure() && UBlueprintNativizationLibrary::CheckAnySubPinLinked(OutputPin) && (FGenerationGraphContext::IsFunctionGraph(Node) || UBlueprintNativizationLibrary::IsPinAllLinkInCurrentFunctionNode(OutputPin, Node, NativizationV2Subsystem->EntryNodes)))
 		{
 			if (!CanGenerateOutPinVariable(OutputPin, NativizationV2Subsystem))
@@ -131,7 +139,7 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 			UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, Node, GenerateFunctionStruct);
 			FString VarName = UBlueprintNativizationLibrary::GetUniquePinName(OutputPin, NativizationV2Subsystem->EntryNodes);
 
-			Contents.Add(FString::Format(TEXT("{0} {1} = {2};\n"), { *UBlueprintNativizationLibrary::GetPinType(OutputPin->PinType, false), *VarName, UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(OutputPin->GetName(), OutputPin->PinType, OutputPin->DefaultValue, OutputPin->DefaultObject, NativizationV2Subsystem->LeftAllAssetRefInBlueprint) }));
+			Contents.Add(FString::Format(TEXT("{0} {1} = {2};\n"), { *UBlueprintNativizationLibrary::GetPinType(OutputPin->PinType, false), *VarName, UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(OutputPin->GetName(), OutputPin->PinType, OutputPin->DefaultValue, OutputPin->DefaultObject) }));
 		}
 	}
 
@@ -154,7 +162,7 @@ TSet<FString> UTranslatorBPToCppObject::GenerateLocalFunctionVariables(UK2Node* 
 			{
 				FString OutString;
 				Contents.Add(FString::Format(TEXT("{0} {1};\n"), { *UBlueprintNativizationLibrary::GetPinType(InputPin->PinType, true), *VarName }));
-				Contents.Add(UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(VarName, InputPin->PinType, InputPin->DefaultValue, Node->GetBlueprint()->GeneratedClass, false, Node, NativizationV2Subsystem->EntryNodes, false, NativizationV2Subsystem->LeftAllAssetRefInBlueprint, OutString));
+				Contents.Add(UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(VarName, InputPin->PinType, InputPin->DefaultValue, Node->GetBlueprint()->GeneratedClass, false, Node, NativizationV2Subsystem->EntryNodes, false, OutString));
 			}
 
 		}

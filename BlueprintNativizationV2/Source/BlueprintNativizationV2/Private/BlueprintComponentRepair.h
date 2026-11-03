@@ -4,6 +4,8 @@
 
 class UBlueprint;
 class USCS_Node;
+class AActor;
+class UActorComponent;
 
 struct FBlueprintComponentRepair
 {
@@ -13,5 +15,6 @@ struct FBlueprintComponentRepair
 
     bool HasRepairs() const;
     static FBlueprintComponentRepair Inspect(UBlueprint* Blueprint);
+    static TArray<UActorComponent*> FindUnmatchedConstructionComponents(AActor* Actor);
     void TryRemoveBrokenNodes(UBlueprint* Blueprint, TArray<FString>& Messages) const;
 };

@@ -32,11 +32,48 @@ static bool WriteJson(const FString& File, const TSharedPtr<FJsonObject>& Object
            IFileManager::Get().Move(*File, *Temporary, true, true);
 }
 
+static void AddIndexedTypeOwner(const TSharedPtr<FJsonObject>& Type, const FString& ModuleName,
+    const TSharedPtr<FJsonObject>& Owners)
+{
+    if (!Type->GetBoolField(TEXT("Definition")))
+    {
+        return;
+    }
+    const TSharedPtr<FJsonObject>* Declaration = nullptr;
+    if (Type->TryGetObjectField(TEXT("Declaration"), Declaration))
+    {
+        if (!(*Declaration)->GetStringField(TEXT("Condition")).IsEmpty())
+        {
+            return;
+        }
+    }
+    else
+    {
+        for (const TSharedPtr<FJsonValue>& Evidence : Type->GetArrayField(TEXT("Evidence")))
+        {
+            if (!Evidence->AsObject()->GetStringField(TEXT("Condition")).IsEmpty())
+            {
+                return;
+            }
+        }
+    }
+    const FString TypeName = Type->GetStringField(TEXT("Name"));
+    FString ExistingOwner;
+    if (Owners->TryGetStringField(TypeName, ExistingOwner) && ExistingOwner != ModuleName)
+    {
+        Owners->SetStringField(TypeName, TEXT(""));
+    }
+    else
+    {
+        Owners->SetStringField(TypeName, ModuleName);
+    }
+}
+
 FString FNativeModuleCache::GetIdentity()
 {
     return FPaths::ConvertRelativePathToFull(FPaths::EngineDir()) + TEXT("|") +
            FEngineVersion::Current().ToString() + TEXT("|Win64|") +
-           LexToString(FApp::GetBuildConfiguration()) + TEXT("|NativeApiCache.Text.18|") +
+           LexToString(FApp::GetBuildConfiguration()) + TEXT("|NativeApiCache.Text.20|") +
            FString::Join(UBlueprintNativeApiCacheLibrary::GetSourceArguments(), TEXT("|"));
 }
 
@@ -189,6 +226,36 @@ bool FNativeModuleCache::ReadIndex(const FString& IndexFile, TSharedPtr<FJsonObj
             }
         }
     }
+    double TypeOwnerPolicy = 0;
+    if (!Index->TryGetNumberField(TEXT("TypeOwnerPolicy"), TypeOwnerPolicy) || TypeOwnerPolicy != 2)
+    {
+        const TSharedPtr<FJsonObject> Owners = MakeShared<FJsonObject>();
+        for (const auto& Entry : (*Modules)->Values)
+        {
+            FString CacheFile;
+            if (!Entry.Value->AsObject()->TryGetStringField(TEXT("File"), CacheFile))
+            {
+                continue;
+            }
+            if (FPaths::IsRelative(CacheFile))
+            {
+                CacheFile = FPaths::ConvertRelativePathToFull(FPaths::GetPath(IndexFile), CacheFile);
+            }
+            TSharedPtr<FJsonObject> Cache;
+            if (!ReadJson(CacheFile, Cache))
+            {
+                Report = TEXT("Cannot index existing module metadata: ") + CacheFile;
+                return false;
+            }
+            for (const TSharedPtr<FJsonValue>& Type : Cache->GetArrayField(TEXT("Types")))
+            {
+                AddIndexedTypeOwner(Type->AsObject(), FString(Entry.Key), Owners);
+            }
+        }
+        Index->SetObjectField(TEXT("TypeOwners"), Owners);
+        Index->SetNumberField(TEXT("TypeOwnerPolicy"), 2);
+        WriteJson(IndexFile, Index);
+    }
     for (const auto& Entry : (*Modules)->Values)
     {
         FString CacheFile;
@@ -224,6 +291,7 @@ bool FNativeModuleCache::Build(const FString& TargetFile, bool bEngine, const FS
     Index->SetStringField(TEXT("Target"), Target->GetStringField(TEXT("Name")));
     Index->SetObjectField(TEXT("Modules"), Entries);
     Index->SetObjectField(TEXT("TypeOwners"), Owners);
+    Index->SetNumberField(TEXT("TypeOwnerPolicy"), 2);
     Index->SetObjectField(TEXT("TypeAliases"), Aliases);
     Index->SetObjectField(TEXT("ConstantOwners"), ConstantOwners);
     Index->SetObjectField(TEXT("TargetInputs"), Inputs);
@@ -390,15 +458,7 @@ bool FNativeModuleCache::Build(const FString& TargetFile, bool bEngine, const FS
         Entry->SetStringField(TEXT("Status"), TEXT("Ready"));
         for (const auto& Value : Cache->GetArrayField(TEXT("Types")))
         {
-            const FString TypeName = Value->AsObject()->GetStringField(TEXT("Name"));
-            if (Owners->HasField(TypeName))
-            {
-                Owners->SetStringField(TypeName, TEXT(""));
-            }
-            else
-            {
-                Owners->SetStringField(TypeName, Name);
-            }
+            AddIndexedTypeOwner(Value->AsObject(), Name, Owners);
         }
         for (const TSharedPtr<FJsonValue>& Value : Cache->GetArrayField(TEXT("Constants")))
         {

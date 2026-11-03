@@ -25,5 +25,7 @@ class BLUEPRINTNATIVIZATIONV2_API UGetSubsystemTranslatorObject : public UTransl
 		NodeNamesForCheck = { };
 	}
 
-    virtual bool ShouldExpandNode(UK2Node* Node) const override;
+public:
+    virtual FGenerateResultStruct GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* Subsystem) override;
+    virtual TSet<FString> GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem) override;
 };

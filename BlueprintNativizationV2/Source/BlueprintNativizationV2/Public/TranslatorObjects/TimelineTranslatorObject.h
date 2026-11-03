@@ -13,6 +13,8 @@
 #include "K2Node_Timeline.h"
 #include "TimelineTranslatorObject.generated.h"
 
+class UCurveBase;
+
 UCLASS()
 class BLUEPRINTNATIVIZATIONV2_API UTimelineTranslatorObject : public UTranslatorBPToCppObject
 {

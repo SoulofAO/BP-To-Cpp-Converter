@@ -27,12 +27,53 @@
 #include "Misc/FileHelper.h"
 #include "ObjectTools.h"
 #include "Engine/World.h"
+#include "Engine/Level.h"
+#include "Engine/MapBuildDataRegistry.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "GameFramework/Actor.h"
 #include "UObject/LinkerLoad.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectHash.h"
+#include "Editor.h"
+#include "EngineUtils.h"
+
+static TArray<AActor*> FindSelectedActorsWithUnmatchedComponents(const TArray<TObjectPtr<UBlueprint>>& Blueprints)
+{
+    TArray<AActor*> Actors;
+    UWorld* World = nullptr;
+    if (GEditor)
+    {
+        World = GEditor->GetEditorWorldContext().World();
+    }
+    if (!World || World->WorldType != EWorldType::Editor)
+    {
+        return Actors;
+    }
+    for (TActorIterator<AActor> Actor(World); Actor; ++Actor)
+    {
+        for (UBlueprint* Blueprint : Blueprints)
+        {
+            if (Blueprint->GeneratedClass && Actor->IsA(Blueprint->GeneratedClass) &&
+                !FBlueprintComponentRepair::FindUnmatchedConstructionComponents(*Actor).IsEmpty())
+            {
+                Actors.Add(*Actor);
+                break;
+            }
+        }
+    }
+    return Actors;
+}
+
+TArray<FString> UBlueprintNativizationToolSession::InspectSourceActorComponents(AActor* Actor)
+{
+    TArray<FString> Components;
+    for (UActorComponent* Component : FBlueprintComponentRepair::FindUnmatchedConstructionComponents(Actor))
+    {
+        Components.Add(Component->GetPathName());
+    }
+    return Components;
+}
 
 void UBlueprintNativizationToolSession::InvalidateBlueprintCodeAnalysis(UBlueprint*)
 {
@@ -86,7 +127,6 @@ bool UBlueprintNativizationToolSession::AnalyzeBlueprintCode()
     Analysis->bGenerateOneFunction = bGenerateOneFunction;
     Analysis->FunctionName = FunctionName;
     Analysis->bIncludeDependencies = true;
-    Analysis->bLeaveAssetReferencesInBlueprint = bLeaveAssetReferencesInBlueprint;
     Analysis->TextGenerationMode = TextGenerationMode;
     Analysis->bRemoveUnrealPrefixesFromFileNames = bRemoveUnrealPrefixesFromFileNames;
     Analysis->bReplaceDefaultOnlyChildrenWithParents = bReplaceDefaultOnlyChildrenWithParents;
@@ -331,6 +371,14 @@ bool UBlueprintNativizationToolSession::AnalyzeBlueprintCode()
             }
         }
     }
+    for (AActor* Actor : FindSelectedActorsWithUnmatchedComponents(AnalyzedBlueprints))
+    {
+        for (UActorComponent* Component : FBlueprintComponentRepair::FindUnmatchedConstructionComponents(Actor))
+        {
+            Errors.AddUnique(FString::Format(TEXT("Unmatched SCS component {0}. TryFix backs up the map and reruns this actor's construction scripts using the current Blueprint. Obsolete components may be removed; they are not promoted to instance components."),
+                {Component->GetPathName()}));
+        }
+    }
     bool bConversionSucceeded = false;
     if (bDependenciesComplete)
     {
@@ -360,7 +408,7 @@ bool UBlueprintNativizationToolSession::AnalyzeBlueprintCode()
     Warnings.Sort();
     BlueprintCodeAnalysisReport = FString::Format(TEXT("Analyzed {0} Blueprints and {1} conversion inputs. Errors: {2}. Warnings: {3}."),
         {AnalyzedBlueprints.Num(), Analysis->Targets.Num(), Errors.Num(), Warnings.Num()});
-    BlueprintCodeAnalysisReport += TEXT("\n\nSource diagnostics and component events were inspected without compiling or saving the original assets. Conversion was attempted in memory using the current options. A blocked or cancelled conversion cannot check subsequent stages. UHT, C++ compilation and gameplay are not checked. Re-run after changing assets, plugin settings or API caches.\n");
+    BlueprintCodeAnalysisReport += TEXT("\n\nSource diagnostics and component events were inspected without compiling or saving the original assets. Actor component consistency was checked in the open editor world only; migration also checks affected assets before changing types. Conversion was attempted in memory using the current options. A blocked or cancelled conversion cannot check subsequent stages. UHT, C++ compilation and gameplay are not checked. Re-run after changing assets, plugin settings or API caches.\n");
     if (!Errors.IsEmpty())
     {
         BlueprintCodeAnalysisReport += TEXT("\nErrors:\n") + FString::Join(Errors, TEXT("\n\n"));
@@ -435,7 +483,7 @@ bool UBlueprintNativizationToolSession::TryFixBlueprintCode()
     TSet<FName> BackedUpPackages;
     const auto BackupAsset = [&BackupDirectory, &Messages, &bRepairIncomplete, &BackedUpPackages](UObject* Asset)
     {
-        UPackage* Package = Asset->GetOutermost();
+        UPackage* Package = Asset->GetPackage();
         if (BackedUpPackages.Contains(Package->GetFName()))
         {
             return true;
@@ -473,6 +521,58 @@ bool UBlueprintNativizationToolSession::TryFixBlueprintCode()
     int32 DeletedBlueprints = 0;
     int32 ResavedPackages = 0;
     IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+    TSet<UPackage*> ReconstructedPackages;
+    TSet<UPackage*> FailedReconstructionPackages;
+    for (AActor* Actor : FindSelectedActorsWithUnmatchedComponents(AnalyzedBlueprints))
+    {
+        if (Actor->IsChildActor())
+        {
+            bRepairIncomplete = true;
+            Messages.Add(TEXT("Manual reconstruction required for a child actor: ") + Actor->GetPathName());
+            continue;
+        }
+        if (!BackupAsset(Actor))
+        {
+            continue;
+        }
+        if (Actor->GetLevel()->MapBuildData && !BackupAsset(Actor->GetLevel()->MapBuildData))
+        {
+            continue;
+        }
+        const FString ActorPath = Actor->GetPathName();
+        UPackage* Package = Actor->GetPackage();
+        for (UActorComponent* Component : FBlueprintComponentRepair::FindUnmatchedConstructionComponents(Actor))
+        {
+            Messages.Add(TEXT("Reconstructing source actor with unmatched SCS component: ") + Component->GetPathName());
+        }
+        Actor->Modify();
+        Actor->RerunConstructionScripts();
+        if (!IsValid(Actor) || !FBlueprintComponentRepair::FindUnmatchedConstructionComponents(Actor).IsEmpty())
+        {
+            bRepairIncomplete = true;
+            FailedReconstructionPackages.Add(Package);
+            Messages.Add(TEXT("Reconstruction did not resolve the source component mismatch; package was not saved: ") + ActorPath);
+            continue;
+        }
+        Actor->MarkPackageDirty();
+        ReconstructedPackages.Add(Package);
+        Messages.Add(TEXT("Reconstructed source actor using the current Blueprint: ") + ActorPath);
+    }
+    for (UPackage* Package : ReconstructedPackages)
+    {
+        if (FailedReconstructionPackages.Contains(Package))
+        {
+            continue;
+        }
+        if (!UEditorLoadingAndSavingUtils::SavePackages({Package}, false))
+        {
+            bRepairIncomplete = true;
+            Messages.Add(TEXT("Reconstructed map could not be saved; backup is retained: ") + Package->GetName());
+            continue;
+        }
+        ++ResavedPackages;
+        Messages.Add(TEXT("Saved source component repair: ") + Package->GetName());
+    }
     for (const auto& Repair : ComponentsToFix)
     {
         UBlueprint* Blueprint = Repair.Key;
@@ -583,6 +683,11 @@ bool UBlueprintNativizationToolSession::TryFixBlueprintCode()
         {
             bRepairIncomplete = true;
             Messages.Add(TEXT("Cannot load package for repair: ") + PackagePath);
+            continue;
+        }
+        if (FailedReconstructionPackages.Contains(Package.Get()))
+        {
+            Messages.Add(TEXT("Package resave skipped after unresolved source reconstruction: ") + PackagePath);
             continue;
         }
         if (!BackupAsset(Package.Get()))

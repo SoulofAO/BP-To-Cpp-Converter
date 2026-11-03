@@ -31,24 +31,25 @@ void UEnhancedInputTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TAr
 
 		const FString ExecNames[] = { TEXT("Triggered"), TEXT("Started"), TEXT("Ongoing"), TEXT("Canceled"), TEXT("Completed") };
 
-		UEdGraphPin* ActionValuePin = EnhancedInputAction->FindPin(TEXT("ActionValue"));
-		FString ActionValuePinName = UBlueprintNativizationLibrary::GetUniquePinName(ActionValuePin, EntryNodes);
+        const FString ActionValuePinName = NativizationV2Subsystem->GetNodeStateName(InputNode, TEXT("InputActionArgument"));
+        const FString ActionState = NativizationV2Subsystem->GetNodeStateName(InputNode, TEXT("InputActionState"));
 
-		for (int32 i = 0; i < UE_ARRAY_COUNT(ExecPins); ++i)
+		for (int32 OutputIndex = 0; OutputIndex < UE_ARRAY_COUNT(ExecPins); ++OutputIndex)
 		{
-			TArray<UK2Node*> MacroStack;
-			if (UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(ExecPins[i], 0, true, MacroStack, NativizationV2Subsystem))
+			TArray<UK2Node*> MacroStack = Path;
+			if (UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(ExecPins[OutputIndex], 0, false, MacroStack, NativizationV2Subsystem))
 			{
 				UK2Node* NextNode = Cast<UK2Node>(NextPin->GetOwningNode());
 				FGenerateFunctionStruct NewGenerateFunctionStruct;
 				NewGenerateFunctionStruct.Node = NextNode;
+                NewGenerateFunctionStruct.MacroStack = MacroStack;
+                NewGenerateFunctionStruct.EntryPinName = NextPin->GetName();
 				NewGenerateFunctionStruct.CustomParametersString.Add(FString::Format(TEXT("{0} {1}"), { "const FInputActionInstance&", ActionValuePinName}));
-				EntryNodes.Add(NewGenerateFunctionStruct);
-
-				if (FGenerateFunctionStruct* FoundStruct = EntryNodes.FindByKey(NewGenerateFunctionStruct))
-				{
-					FoundStruct->Name = *UBlueprintNativizationLibrary::GetUniqueEntryNodeName(NextNode, EntryNodes, FString::Format(TEXT("{0}_{1}"), { ExecNames[i], EnhancedInputAction->InputAction->GetName() }));
-				}
+                NewGenerateFunctionStruct.CustomArguments.Add(ActionState);
+                NewGenerateFunctionStruct.EntryInitializationCode = ActionState + TEXT(" = ") + ActionValuePinName + TEXT(";\n");
+                NewGenerateFunctionStruct.Name = *NativizationV2Subsystem->GetNodeStateName(InputNode,
+                    TEXT("Input") + ExecNames[OutputIndex] + EnhancedInputAction->InputAction->GetName());
+                EntryNodes.Add(NewGenerateFunctionStruct);
 			}
 		}
 	}
@@ -74,9 +75,9 @@ FString UEnhancedInputTranslatorObject::GenerateSetupPlayerInputComponentFunctio
 		TArray<UK2Node*> MacroStack;
 		MacroStack.Empty();
 		bool HaveAnyNonKnotExecPin = false;
-		for (int32 i = 0; i < UE_ARRAY_COUNT(ExecPins); ++i)
+		for (int32 OutputIndex = 0; OutputIndex < UE_ARRAY_COUNT(ExecPins); ++OutputIndex)
 		{
-			if (UBlueprintNativizationLibrary::GetFirstNonKnotPin(ExecPins[i], 0, true, MacroStack, NativizationV2Subsystem))
+			if (UBlueprintNativizationLibrary::GetFirstNonKnotPin(ExecPins[OutputIndex], 0, false, MacroStack, NativizationV2Subsystem))
 			{
 				HaveAnyNonKnotExecPin = true;
 				break;
@@ -89,23 +90,21 @@ FString UEnhancedInputTranslatorObject::GenerateSetupPlayerInputComponentFunctio
 
 		Content += "if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) \n {\n";
 
-		for (int32 i = 0; i < UE_ARRAY_COUNT(ExecPins); ++i)
+		for (int32 OutputIndex = 0; OutputIndex < UE_ARRAY_COUNT(ExecPins); ++OutputIndex)
 		{
 			MacroStack.Empty();
-			if (UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(ExecPins[i], 0, true, MacroStack, NativizationV2Subsystem))
+			if (UEdGraphPin* NextPin = UBlueprintNativizationLibrary::GetFirstNonKnotPin(ExecPins[OutputIndex], 0, false, MacroStack, NativizationV2Subsystem))
 			{
-				UK2Node* NextNode = Cast<UK2Node>(NextPin->GetOwningNode());
-
-				FGenerateFunctionStruct GenerateFunctionStruct;
-				UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, NextNode, GenerateFunctionStruct);
+                const FString CallbackName = NativizationV2Subsystem->GetNodeStateName(InputNode,
+                    TEXT("Input") + ExecNames[OutputIndex] + EnhancedInputAction->InputAction->GetName());
 
 				const FString InputActionContent = FRetainedBlueprintGeneration::GetAssetValue(
                     const_cast<UInputAction*>(EnhancedInputAction->InputAction.Get()), UInputAction::StaticClass());
 				Content += FString::Format(TEXT("EnhancedInputComponent->BindAction({0}, ETriggerEvent::{1}, this, &{2}::{3});\n"),
 					{ InputActionContent,
-					ExecNames[i],
+					ExecNames[OutputIndex],
 					UBlueprintNativizationLibrary::GetUniqueFieldName(InputNode->GetBlueprint()->GeneratedClass),
-					GenerateFunctionStruct.Name.ToString()
+					CallbackName
 					});
 			}
 		}
@@ -116,7 +115,8 @@ FString UEnhancedInputTranslatorObject::GenerateSetupPlayerInputComponentFunctio
 
 FString UEnhancedInputTranslatorObject::GenerateGlobalVariables(UK2Node* InputNode, FString Prefix, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-    return FString();
+    return TEXT("UPROPERTY(Transient)\nFInputActionInstance ") +
+        NativizationV2Subsystem->GetNodeStateName(InputNode, TEXT("InputActionState")) + TEXT(";\n");
 }
 
 FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
@@ -129,11 +129,11 @@ FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCode
 		UEdGraphPin* InputActionPin = EnhancedInputAction->FindPin(TEXT("InputAction"));
 
 		UEdGraphPin* ActionValuePin = EnhancedInputAction->FindPin(TEXT("ActionValue"));
-		FString ActionValuePinName = UBlueprintNativizationLibrary::GetUniquePinName(ActionValuePin, NativizationV2Subsystem->EntryNodes);
+        const FString ActionValuePinName = NativizationV2Subsystem->GetNodeStateName(Node, TEXT("InputActionState"));
 
 		if (InputActionPin == Pin)
 		{
-			return ActionValuePinName;
+            return FRetainedBlueprintGeneration::GetAssetValue(const_cast<UInputAction*>(EnhancedInputAction->InputAction.Get()), UInputAction::StaticClass());
 		}
 		if (TriggeredSecondsPin == Pin)
 		{
@@ -164,7 +164,8 @@ FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCode
             {
                 ValueType = TEXT("float");
             }
-            FString Value = FString::Format(TEXT("{0}.GetValue().Get<{1}>()"), { ActionValuePinName, ValueType });
+            const FString ActionType = StaticEnum<EInputActionValueType>()->GetNameStringByValue(static_cast<int64>(EnhancedInputAction->InputAction->ValueType));
+            FString Value = FString::Format(TEXT("{0}.GetValue().ConvertToType(EInputActionValueType::{2}).Get<{1}>()"), { ActionValuePinName, ValueType, ActionType });
 			
 			for (UEdGraphPin* CheckPin : PathPins)
 			{
@@ -194,7 +195,7 @@ FGenerateResultStruct UEnhancedInputTranslatorObject::GenerateInputParameterCode
 
 bool UEnhancedInputTranslatorObject::CanContinueGenerateInputParameterCodeForNode(UK2Node* Node, UEdGraphPin* Pin, int PinIndex, TArray<UK2Node*> MacroStack, UNativizationV2Subsystem* NativizationV2Subsystem)
 {
-	return false;
+	return true;
 }
 
 TSet<FString> UEnhancedInputTranslatorObject::GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* NativizationV2Subsystem)

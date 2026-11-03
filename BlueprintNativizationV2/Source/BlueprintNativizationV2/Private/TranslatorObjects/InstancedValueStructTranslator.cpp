@@ -28,8 +28,7 @@ static FString GenerateInstancedContents(const UScriptStruct* Structure, const v
     Type.PinSubCategoryObject = const_cast<UScriptStruct*>(Structure);
     FString Text;
     Structure->ExportText(Text, Memory, nullptr, const_cast<UObject*>(Request.OwnerObject), PPF_None, nullptr);
-    return UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(Structure->GetName(), Type, Text, nullptr,
-        Request.bKeepAssetReferencesInBlueprint);
+    return UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(Structure->GetName(), Type, Text, nullptr);
 }
 
 static FString SchemaObjectExpression(const UObject* Object)

@@ -37,7 +37,7 @@ FGenerateResultStruct ULiteralTranslatorObject::GenerateInputParameterCodeForNod
         Type.PinCategory = UEdGraphSchema_K2::PC_Class;
     }
     return UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(Pin->GetName(), Type,
-        FString(), Literal->GetObjectRef(), Subsystem->LeftAllAssetRefInBlueprint);
+        FString(), Literal->GetObjectRef());
 }
 
 TSet<FString> ULiteralTranslatorObject::GenerateCppIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem)
@@ -92,35 +92,14 @@ FString ULiteralTranslatorObject::GenerateGlobalVariables(UK2Node* Node, FString
     {
         return FString();
     }
-    FString Declaration = TEXT("UPROPERTY()\n");
-    if (Subsystem->LeftAllAssetRefInBlueprint)
-    {
-        Declaration = TEXT("UPROPERTY(EditDefaultsOnly, Category=\"Assets\")\n");
-    }
+    FString Declaration = TEXT("UPROPERTY(EditDefaultsOnly, Category=\"Assets\")\n");
     return Declaration + UBlueprintNativizationLibrary::GetPinType(Literal->GetValuePin()->PinType, false) +
         TEXT(" ") + Subsystem->GetNodeStateName(Node, Value->GetName()) + TEXT(" = nullptr;\n");
 }
 
 FString ULiteralTranslatorObject::GenerateConstruction(UK2Node* Node, FString Prefix, UNativizationV2Subsystem* Subsystem)
 {
-    UK2Node_Literal* Literal = CastChecked<UK2Node_Literal>(Node);
-    UObject* Value = Literal->GetObjectRef();
-    if (!Value || !Value->IsAsset() || Subsystem->LeftAllAssetRefInBlueprint)
-    {
-        return FString();
-    }
-    FString Storage;
-    if (FObjectPropertyBase* Property = FindStorageProperty(Literal))
-    {
-        Storage = UBlueprintNativizationLibrary::GetUniquePropertyName(Property);
-    }
-    else
-    {
-        Storage = Subsystem->GetNodeStateName(Node, Value->GetName());
-    }
-    return Prefix + Storage + TEXT(" = ") +
-        UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(Literal->GetValuePin()->GetName(),
-            Literal->GetValuePin()->PinType, FString(), Value, false) + TEXT(";\n");
+    return FString();
 }
 
 TSet<FString> ULiteralTranslatorObject::GenerateHeaderIncludeInstructions(UK2Node* Node, UNativizationV2Subsystem* Subsystem)

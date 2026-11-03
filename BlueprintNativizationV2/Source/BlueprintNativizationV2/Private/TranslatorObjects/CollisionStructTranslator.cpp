@@ -111,7 +111,7 @@ bool UCollisionStructTranslator::CanInitializeValueBeforeEngineStartup(const FSt
                 }
             }
             if (!PropertyIterator->Identical(PropertyMemory, PropertyIterator->ContainerPtrToValuePtr<void>(&Baseline, ElementIndex)) &&
-                !FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(*PropertyIterator, PropertyMemory, Request.bKeepAssetReferencesInBlueprint))
+                !FRetainedBlueprintGeneration::CanInitializeValueBeforeEngineStartup(*PropertyIterator, PropertyMemory))
             {
                 return false;
             }

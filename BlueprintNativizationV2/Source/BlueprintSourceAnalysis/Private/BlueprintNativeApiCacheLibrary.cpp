@@ -208,7 +208,7 @@ bool UBlueprintNativeApiCacheLibrary::ReadValidatedSourceCache(const FString& Ca
     bool bSucceeded = false;
     if (!Cache->TryGetNumberField(TEXT("SchemaVersion"), Schema) || Schema != 1 ||
         !Cache->TryGetStringField(TEXT("AnalyzerVersion"), AnalyzerVersion) ||
-        AnalyzerVersion != TEXT("NativeApiCache.Text.18") ||
+        AnalyzerVersion != TEXT("NativeApiCache.Text.20") ||
         !Cache->TryGetStringField(TEXT("Configuration"), Configuration) ||
         Configuration != FEngineVersion::Current().ToString() ||
         !Cache->TryGetBoolField(TEXT("Succeeded"), bSucceeded) || !bSucceeded ||

@@ -7,6 +7,7 @@
 #include "TranslatorObjects/TimelineTranslatorObject.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
+#include "BlueprintNativizationSettings.h"
 #include "Engine/TimelineTemplate.h"
 #include "Curves/CurveFloat.h"
 #include "Curves/CurveVector.h"
@@ -25,7 +26,7 @@ void UTimelineTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<U
         {
             continue;
         }
-        TArray<UK2Node*> MacroStack;
+        TArray<UK2Node*> MacroStack = Path;
         UEdGraphPin* Target = UBlueprintNativizationLibrary::GetFirstNonKnotPin(Pin, 0, false, MacroStack, Subsystem);
         if (!Target)
         {
@@ -33,13 +34,14 @@ void UTimelineTranslatorObject::GenerateNewFunction(UK2Node* InputNode, TArray<U
         }
         if (EntryNodes.ContainsByPredicate([&](const FGenerateFunctionStruct& Entry)
         {
-            return Entry.Node == Target->GetOwningNode() && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName();
+            return Entry.Node == Target->GetOwningNode() && Entry.MacroStack == MacroStack && Entry.bIsLatentContinuation && Entry.EntryPinName == Target->GetName();
         }))
         {
             continue;
         }
         FGenerateFunctionStruct Entry;
         Entry.Node = CastChecked<UK2Node>(Target->GetOwningNode());
+        Entry.MacroStack = MacroStack;
         Entry.Name = *Subsystem->GetNodeStateName(Entry.Node, Timeline->TimelineName.ToString() + Pin->GetName());
         Entry.bIsLatentContinuation = true;
         Entry.EntryPinName = Target->GetName();
@@ -108,7 +110,9 @@ FString UTimelineTranslatorObject::GenerateConstruction(UK2Node* InputNode, FStr
     FString Content = FString::Format(TEXT("{0} = CreateDefaultSubobject<UTimelineComponent>(TEXT(\"{1}\"));\n"),
         { Variable, Timeline->TimelineName.ToString().ReplaceCharWithEscapedChar() });
     Content += Variable + TEXT("->SetPropertySetObject(this);\n");
-    FRetainedBlueprintGeneration::AddInstanceInitialization(Variable + TEXT("->SetPropertySetObject(this);\n"));
+    FRetainedBlueprintGeneration::AddInstanceInitialization(FString::Format(
+        TEXT("{0} = Cast<UTimelineComponent>(GetDefaultSubobjectByName(FName(TEXT(\"{1}\"))));\n{0}->SetPropertySetObject(this);\n"),
+        {Variable, Timeline->TimelineName.ToString().ReplaceCharWithEscapedChar()}));
     Content += Variable + TEXT("->SetDirectionPropertyName(TEXT(\"") + PropertyName(Definition->GetDirectionPropertyName()) + TEXT("\"));\n");
     Content += Variable + TEXT("->SetTimelineLength(") + FString::SanitizeFloat(Definition->TimelineLength) + TEXT("f);\n");
     Content += Variable + TEXT("->SetTimelineLengthMode(") + UBlueprintNativizationLibrary::GenerateEnumLiteral(StaticEnum<ETimelineLengthMode>(), Definition->LengthMode) + TEXT(");\n");
@@ -118,10 +122,14 @@ FString UTimelineTranslatorObject::GenerateConstruction(UK2Node* InputNode, FStr
     Content += Variable + TEXT("->PrimaryComponentTick.TickGroup = ") + UBlueprintNativizationLibrary::GenerateEnumLiteral(StaticEnum<ETickingGroup>(), Definition->TimelineTickGroup) + TEXT(";\n");
     auto SerializeCurve = [&](const FRichCurve& Curve, const FString& Destination)
     {
-        FString Text;
-        FRichCurve::StaticStruct()->ExportText(Text, &Curve, nullptr, nullptr, PPF_None, nullptr);
-        return TEXT("FRichCurve::StaticStruct()->ImportText(TEXT(\"") + Text.ReplaceCharWithEscapedChar() + TEXT("\"), &") +
-            Destination + TEXT(", nullptr, PPF_None, nullptr, TEXT(\"TimelineCurve\"));\n");
+        FStructTranslationRequest Request;
+        Request.Structure = FRichCurve::StaticStruct();
+        Request.Operation = EStructTranslationOperation::PropertyValue;
+        Request.PropertyValue = &Curve;
+        Request.OwnerClass = InputNode->GetBlueprint()->GeneratedClass;
+        Request.DestinationExpression = Destination;
+        Request.InitializationStage = EStructInitializationStage::NativeConstructor;
+        return UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
     };
     auto AddCurve = [&](UCurveBase* Curve, const FTTPropertyTrack& Track, const FString& Type, const FString& Kind)
     {

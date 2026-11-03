@@ -40,7 +40,7 @@ bool FNativeCacheTask::Start(bool bEngine, FString& Report)
     }
     TaskDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("NativeApiCache/Tasks") / FGuid::NewGuid().ToString(EGuidFormats::Digits));
     IFileManager::Get().MakeDirectory(*TaskDirectory, true);
-    const FString Arguments = FString::Format(TEXT("\"{0}\" -run=BlueprintSourceAnalysis.NativeCacheWorkerCommandlet -CacheScope={1} -TaskDirectory=\"{2}\" -nullrhi -unattended -nosplash -NoSound -ddc=NoZenLocalFallback -abslog=\"{2}/Worker.log\""),
+    const FString Arguments = FString::Format(TEXT("\"{0}\" -run=NativeCacheWorker -CacheScope={1} -TaskDirectory=\"{2}\" -nullrhi -unattended -nosplash -NoSound -ddc=NoZenLocalFallback -abslog=\"{2}/Worker.log\""),
         { FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()), TaskScope, TaskDirectory });
     const FString Executable = FPlatformProcess::ExecutablePath();
     CacheProcess = FPlatformProcess::CreateProc(*Executable, *Arguments, false, true, true, nullptr, 0, nullptr, nullptr);

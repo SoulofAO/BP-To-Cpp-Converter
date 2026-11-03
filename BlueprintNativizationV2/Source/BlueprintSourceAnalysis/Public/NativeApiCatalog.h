@@ -9,6 +9,7 @@ public:
     static void BeginGeneration(bool bAllowSourceFallback = false);
     static TSharedPtr<FJsonObject> FindType(UStruct* Structure);
     static TSet<FString> GetValueTypeModules(UStruct* Structure);
+    static TSharedPtr<FJsonObject> ResolveCallable(UFunction* Function);
     static bool CanCallFunctionDirectly(UFunction* Function, UClass* CallingClass = nullptr);
     static TSharedPtr<FJsonObject> FindPublicDeclaration(const FString& Name);
     static TSharedPtr<FJsonObject> FindCallable(UFunction* Function);

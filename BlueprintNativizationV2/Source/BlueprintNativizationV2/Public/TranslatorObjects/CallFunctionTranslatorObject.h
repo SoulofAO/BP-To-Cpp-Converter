@@ -21,7 +21,6 @@ class BLUEPRINTNATIVIZATIONV2_API UCallFunctionTranslatorObject : public UTransl
 
 public:
 
-    virtual bool ShouldExpandNode(UK2Node* Node) const override;
 
     UCallFunctionTranslatorObject()
     {
@@ -40,6 +39,9 @@ public:
     FString AdaptReturnValue(UK2Node_CallFunction* Call, const FString& Expression, FGenerationPreparations& Preparations) const;
 
     bool CanInlineArithmetic(UK2Node_CallFunction* Call, UK2Node* Consumer) const;
+
+    FString ConvertPromotableArgument(UK2Node_CallFunction* Call, UEdGraphPin* Input, FProperty* Parameter,
+        const FString& Expression, UNativizationV2Subsystem* Subsystem);
 
     static bool HasContainerFunctionTranslation(UFunction* Function);
 

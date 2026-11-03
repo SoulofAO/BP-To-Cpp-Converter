@@ -4,6 +4,9 @@
  * Copyright AO All Rights Reserved.
  */
 
+#include "HAL/FileManager.h"
+#include "Internationalization/Regex.h"
+#include "Framework/Application/SlateApplication.h"
 #include "BlueprintNativizationLibrary.h"
 #include "EngineAssetPolicy.h"
 #include "GameFramework/Actor.h"
@@ -133,6 +136,7 @@ UK2Node* UBlueprintNativizationLibrary::FindEntryNodeByFunctionName(UBlueprint* 
 				{
 					return EntryNode;
 				}
+			    continue;
 			}
 
 			FName EntryName = GetEntryFunctionNameByNode(EntryNode);
@@ -223,7 +227,7 @@ FProperty* UBlueprintNativizationLibrary::GetPropertyFromEntryNode(UK2Node* Entr
 	{
 		return nullptr;
 	}
-	
+
 	if (const UFunction* Function = FindFunctionByFunctionName(EntryNode->GetBlueprint(), *GetFunctionNameByEntryNode(EntryNode)))
 	{
 		return Function->FindPropertyByName(PropertyName);
@@ -281,7 +285,7 @@ TArray<UK2Node*> UBlueprintNativizationLibrary::GetAllExecuteNodesInFunction(UK2
 		TArray<UEdGraphPin*> Pins;
 		Pins = GetFilteredPins(Current, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin);
 
-		if (EntryPinName.IsEmpty() || EntryPinName == "None")
+		if (Current != EntryNode || EntryPinName.IsEmpty() || EntryPinName == "None" || !EntryNode->FindPin(*EntryPinName, EGPD_Output))
 		{
 			for (UEdGraphPin* OutPin : Pins)
 			{
@@ -292,7 +296,7 @@ TArray<UK2Node*> UBlueprintNativizationLibrary::GetAllExecuteNodesInFunction(UK2
 					{
 						PendingNodes.AddUnique(Cast<UK2Node>(LinkedExecPin->GetOwningNode()));
 					}
-					
+
 				}
 			}
 		}
@@ -341,7 +345,7 @@ TArray<UK2Node*> UBlueprintNativizationLibrary::GetAllExecuteNodesInFunction(UK2
 		TArray<UEdGraphPin*> Pins;
 		Pins = GetFilteredPins(Current, EPinOutputOrInputFilter::Ouput, EPinExcludeFilter::None, EPinIncludeOnlyFilter::ExecPin);
 
-		if (EntryPinName.IsEmpty() || EntryPinName == "None")
+		if (Current != EntryNode || EntryPinName.IsEmpty() || EntryPinName == "None" || !EntryNode->FindPin(*EntryPinName, EGPD_Output))
 		{
 			for (UEdGraphPin* OutPin : Pins)
 			{
@@ -482,17 +486,17 @@ bool UBlueprintNativizationLibrary::CheckLoopInFunction(UK2Node* EntryNode, TArr
 		{
 			if (EntryNodeSet.Contains(Current))
 			{
-				return false; // ��� ��������� ����, ����� ��� ������ ������ ������
+				return false; // пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ, пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
 			}
 
 			if (RecursionStack.Contains(Current))
 			{
-				return true; // ������� �����
+				return true; // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ
 			}
 
 			if (Visited.Contains(Current))
 			{
-				return false; // ��� ����������, � ������ �� ����
+				return false; // пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ, пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅ
 			}
 
 			Visited.Add(Current);
@@ -508,7 +512,7 @@ bool UBlueprintNativizationLibrary::CheckLoopInFunction(UK2Node* EntryNode, TArr
 				}
 				else
 				{
-					Pins.Empty(); // ��������� ��� �� ������ � ���������
+					Pins.Empty(); // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 				}
 			}
 
@@ -521,7 +525,7 @@ bool UBlueprintNativizationLibrary::CheckLoopInFunction(UK2Node* EntryNode, TArr
 						UK2Node* NextNode = Cast<UK2Node>(Linked->GetOwningNode());
 						if (NextNode && DFS(NextNode))
 						{
-							return true; // ����� ������� � ����� �� ��������
+							return true; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 						}
 					}
 				}
@@ -870,6 +874,11 @@ FString UBlueprintNativizationLibrary::GetUniquePinName(UEdGraphPin* Pin, TArray
 		return TEXT("InvalidPin");
 	}
 
+    if (UNativizationV2Subsystem* Generator = FGenerationGraphContext::GetGenerator(); Generator &&
+        !FGenerationGraphContext::GetMacroStack(CastChecked<UK2Node>(Pin->GetOwningNode())).IsEmpty())
+    {
+        return Generator->GetNodeStateName(CastChecked<UK2Node>(Pin->GetOwningNode()), Pin->PinName.ToString());
+    }
 	UBlueprintNativizationUniqueNameSubsystem* Subsystem = GEngine->GetEngineSubsystem<UBlueprintNativizationUniqueNameSubsystem>();
 	if (Subsystem)
 	{
@@ -900,7 +909,7 @@ UFunction* UBlueprintNativizationLibrary::GetRootFunctionDeclaration(const UFunc
 	const FName FunctionName = Function->GetFName();
 	const UClass* SuperClass = Function->GetOwnerClass();
 
-	UFunction* RootFunction = const_cast<UFunction*>(Function); // на случай, если это уже корень
+	UFunction* RootFunction = const_cast<UFunction*>(Function); // РЅР° СЃР»СѓС‡Р°Р№, РµСЃР»Рё СЌС‚Рѕ СѓР¶Рµ РєРѕСЂРµРЅСЊ
 
 	while (SuperClass)
 	{
@@ -913,7 +922,21 @@ UFunction* UBlueprintNativizationLibrary::GetRootFunctionDeclaration(const UFunc
 		SuperClass = SuperClass->GetSuperClass();
 	}
 
-	return RootFunction;
+    if (!RootFunction->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface | CLASS_Native))
+    {
+        for (const UClass* Layer = Function->GetOwnerClass(); Layer; Layer = Layer->GetSuperClass())
+        {
+            for (const FImplementedInterface& ImplementedInterface : Layer->Interfaces)
+            {
+                UFunction* InterfaceFunction = ImplementedInterface.Class->FindFunctionByName(FunctionName);
+                if (InterfaceFunction && Function->IsSignatureCompatibleWith(InterfaceFunction))
+                {
+                    return GetRootFunctionDeclaration(InterfaceFunction);
+                }
+            }
+        }
+    }
+    return RootFunction;
 }
 
 
@@ -1023,7 +1046,7 @@ UEditorUtilityWidget* UBlueprintNativizationLibrary::OpenEditorUtilityWidget(UEd
 
 	if (UEditorUtilitySubsystem* Subsystem = GEditor->GetEditorSubsystem<UEditorUtilitySubsystem>())
 	{
-		// Если такой EUW уже открыт, Subsystem сфокусирует существующую вкладку.
+		// Р•СЃР»Рё С‚Р°РєРѕР№ EUW СѓР¶Рµ РѕС‚РєСЂС‹С‚, Subsystem СЃС„РѕРєСѓСЃРёСЂСѓРµС‚ СЃСѓС‰РµСЃС‚РІСѓСЋС‰СѓСЋ РІРєР»Р°РґРєСѓ.
 		return Subsystem->SpawnAndRegisterTab(WidgetBlueprint);
 	}
 #endif
@@ -1098,18 +1121,18 @@ TArray<UStruct*> UBlueprintNativizationLibrary::FindStructsContainingProperty(FP
 		return Results;
 	}
 
-	// ����������� �� ���� ��������� ���������� (������� ������, �������, ���������)
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ, пїЅпїЅпїЅпїЅпїЅпїЅпїЅ, пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ)
 	for (TObjectIterator<UStruct> StructIt; StructIt; ++StructIt)
 	{
 		UStruct* Struct = *StructIt;
 
-		// ���������� ��� FProperty ������ ���������
+		// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ FProperty пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 		for (FProperty* Prop = Struct->PropertyLink; Prop != nullptr; Prop = Prop->PropertyLinkNext)
 		{
 			if (Prop == TargetProperty)
 			{
 				Results.Add(Struct);
-				break; // ����� ����� � �� ��� ����� ������ property � ���� �������
+				break; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ property пїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 			}
 		}
 	}
@@ -1375,7 +1398,7 @@ bool UBlueprintNativizationLibrary::RequiresPostCDOInitialization(FProperty* Pro
     return RequiresDeferredObjectInitialization(Property, PropertyAddress, bIncludeNativeDependencies, VisitedObjects);
 }
 
-FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(FProperty* Property, bool LeftAllAssetRefInBlueprint, void* PropertyAddress, const FString& ObjectOuter)
+FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForProperty(FProperty* Property, void* PropertyAddress, const FString& ObjectOuter)
 {
 	if (!Property || !PropertyAddress)
 	{
@@ -1390,13 +1413,13 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
     {
         FEdGraphPinType Type;
         ConvertPropertyToPinType(Property, Type);
-        if (LeftAllAssetRefInBlueprint && Property->IsA<FSoftObjectProperty>())
+        if (Property->IsA<FSoftObjectProperty>())
         {
             return GetPinType(Type, false) + TEXT("{}");
         }
         FString Value;
         Property->ExportTextItem_Direct(Value, PropertyAddress, nullptr, nullptr, PPF_None);
-        return GenerateOneLineDefaultConstructor(Property->GetName(), Type, Value, nullptr, LeftAllAssetRefInBlueprint);
+        return GenerateOneLineDefaultConstructor(Property->GetName(), Type, Value, nullptr);
     }
 	if (FIntProperty* IntProp = CastField<FIntProperty>(Property))
 	{
@@ -1409,34 +1432,26 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
     else if (FClassProperty* ClassProperty = CastField<FClassProperty>(Property))
     {
         UClass* DefaultClass = Cast<UClass>(ClassProperty->GetObjectPropertyValue(PropertyAddress));
-        if (LeftAllAssetRefInBlueprint && DefaultClass && !DefaultClass->HasAnyClassFlags(CLASS_Native))
+        if (DefaultClass && !DefaultClass->HasAnyClassFlags(CLASS_Native))
         {
             return TEXT("nullptr");
         }
         FEdGraphPinType Type;
         ConvertPropertyToPinType(Property, Type);
         return GenerateOneLineDefaultConstructor(Property->GetName(), Type, FString(),
-            ClassProperty->GetObjectPropertyValue(PropertyAddress), LeftAllAssetRefInBlueprint);
+            ClassProperty->GetObjectPropertyValue(PropertyAddress));
     }
 	else if (FObjectPropertyBase* ObjectPropertyBase = CastField<FObjectPropertyBase>(Property))
 	{
 		UObject* Object = ObjectPropertyBase->GetObjectPropertyValue(PropertyAddress);
         if (Object && Property->HasAnyPropertyFlags(CPF_InstancedReference | CPF_PersistentInstance))
         {
-            return FRetainedBlueprintGeneration::ConstructInstancedObject(ObjectPropertyBase, Object, ObjectOuter, LeftAllAssetRefInBlueprint);
+            return FRetainedBlueprintGeneration::ConstructInstancedObject(ObjectPropertyBase, Object, ObjectOuter);
         }
 		if (Object && Object->IsAsset())
 		{
-			if (LeftAllAssetRefInBlueprint)
 			{
 				return FString(TEXT("nullptr"));
-			}
-			else
-			{
-				FString AssetPath = FSoftObjectPath(Object).ToString();
-				RegisterAssetClassInclude(Object->GetClass());
-				return FString::Format(TEXT("LoadObject<{0}>(nullptr, TEXT(\"{1}\"))"),
-					TArray<FStringFormatArg>{ FStringFormatArg(FRetainedBlueprintGeneration::GetClassName(Object->GetClass())), FStringFormatArg(AssetPath) });
 			}
 		}
 		else
@@ -1505,7 +1520,6 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
             Request.Structure = StructProperty->Struct;
             Request.Property = Property;
             Request.PropertyValue = PropertyAddress;
-            Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
             Request.OwnerExpression = ObjectOuter;
             Request.Operation = EStructTranslationOperation::PropertyValue;
             return UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
@@ -1518,7 +1532,6 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
             Request.Structure = StructProperty->Struct;
             Request.Property = Property;
             Request.PropertyValue = PropertyAddress;
-            Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
             Request.OwnerExpression = ObjectOuter;
             Request.Operation = EStructTranslationOperation::PropertyValue;
             return UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
@@ -1543,7 +1556,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
 
 			void* InnerPropertyAddress = InnerProp->ContainerPtrToValuePtr<void>(PropertyAddress);
 
-            FString Argument = GenerateOneLineDefaultConstructorForProperty(InnerProp, LeftAllAssetRefInBlueprint, InnerPropertyAddress, ObjectOuter);
+            FString Argument = GenerateOneLineDefaultConstructorForProperty(InnerProp, InnerPropertyAddress, ObjectOuter);
             if (InnerProp->IsA<FArrayProperty>() || InnerProp->IsA<FSetProperty>() || InnerProp->IsA<FMapProperty>())
             {
                 Argument = GetPropertyType(InnerProp) + Argument;
@@ -1564,7 +1577,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
 		for (int32 i = 0; i < Helper.Num(); ++i)
 		{
 			if (i > 0) Result += TEXT(", ");
-			Result += GenerateOneLineDefaultConstructorForProperty(ArrayProperty->Inner, LeftAllAssetRefInBlueprint, Helper.GetRawPtr(i), ObjectOuter);
+			Result += GenerateOneLineDefaultConstructorForProperty(ArrayProperty->Inner, Helper.GetRawPtr(i), ObjectOuter);
 		}
 		Result += TEXT("}");
 		return Result;
@@ -1582,7 +1595,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
 			if (Helper.IsValidIndex(Index))
 			{
 				if (i++ > 0) Result += TEXT(", ");
-				Result += GenerateOneLineDefaultConstructorForProperty(SetProperty->ElementProp, LeftAllAssetRefInBlueprint, Helper.GetElementPtr(Index), ObjectOuter);
+				Result += GenerateOneLineDefaultConstructorForProperty(SetProperty->ElementProp, Helper.GetElementPtr(Index), ObjectOuter);
 			}
 		}
 		Result += TEXT("}");
@@ -1601,8 +1614,8 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructorForPrope
 			{
 				if (i++ > 0) Result += TEXT(", ");
 
-				FString KeyStr = GenerateOneLineDefaultConstructorForProperty(MapProperty->KeyProp, LeftAllAssetRefInBlueprint, Helper.GetKeyPtr(Index), ObjectOuter);
-				FString ValueStr = GenerateOneLineDefaultConstructorForProperty(MapProperty->ValueProp, LeftAllAssetRefInBlueprint, Helper.GetValuePtr(Index), ObjectOuter);
+				FString KeyStr = GenerateOneLineDefaultConstructorForProperty(MapProperty->KeyProp, Helper.GetKeyPtr(Index), ObjectOuter);
+				FString ValueStr = GenerateOneLineDefaultConstructorForProperty(MapProperty->ValueProp, Helper.GetValuePtr(Index), ObjectOuter);
 
 				Result += FString::Printf(TEXT("{%s, %s}"), *KeyStr, *ValueStr);
 			}
@@ -1687,7 +1700,7 @@ static void ClearDefaultAssetValues(FProperty* Property, void* Value)
 FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForProperty(FProperty* Property,
 	void* PropertyAddress,
 	void* SuperPropertyAddress,
-	TArray<FGenerateFunctionStruct> EntryNodes, UClass* Class, bool FullInitialize, bool LeftAllAssetRefInBlueprint, FString PrefixComponentName, FString& NewPropertyName, const FString& ObjectOuter)
+	TArray<FGenerateFunctionStruct> EntryNodes, UClass* Class, bool FullInitialize, FString PrefixComponentName, FString& NewPropertyName, const FString& ObjectOuter)
 {
 	FString Content;
 
@@ -1702,24 +1715,35 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
                 bRequiresSerializedInitialization |= Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPrivate | CPF_NativeAccessSpecifierProtected);
             }
         }
+        if (FullInitialize && bRequiresSerializedInitialization)
+        {
+            FStructOnScope SourceValue(StructProperty->Struct);
+            StructProperty->Struct->CopyScriptStruct(SourceValue.GetStructMemory(), PropertyAddress);
+            for (TFieldIterator<FProperty> Member(StructProperty->Struct); Member; ++Member)
+            {
+                ClearDefaultAssetValues(*Member, Member->ContainerPtrToValuePtr<void>(SourceValue.GetStructMemory()));
+            }
+            FStructTranslationRequest Request;
+            Request.Structure = StructProperty->Struct;
+            Request.Property = Property;
+            Request.PropertyValue = SourceValue.GetStructMemory();
+            Request.OwnerClass = Class;
+            Request.OwnerExpression = ObjectOuter;
+            Request.InitializationStage = EStructInitializationStage::NativeConstructor;
+            Request.Operation = EStructTranslationOperation::PropertyValue;
+            FGenerationPreparations Preparations;
+            const FString Expression = UBlueprintNativizationSettingsLibrary::TranslateStructure(Request, &Preparations);
+            StructName = GenerateLambdaConstructorUniqueVariableName(Class, StructProperty->GetName() + TEXT("DefaultValue"));
+            Content += FString::Join(Preparations.Array(), TEXT("\n")) + TEXT("\n");
+            Content += TEXT("auto&& ") + StructName + TEXT(" = ") + Expression + TEXT(";\n");
+            NewPropertyName = StructName;
+            return Content;
+        }
 		if (FullInitialize)
 		{
 			StructName = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(Class, StructProperty->GetName() + TEXT("DefaultValue"));
             const FString StructureType = GetUniqueFieldName(StructProperty->Struct);
-            if (bRequiresSerializedInitialization)
-            {
-                FStructTranslationResult Requirements;
-                Requirements.HeaderIncludes.Add(TEXT("UObject/StructOnScope.h"));
-                FNativeGenerationContext::AddRequirements(Requirements);
-                const FString StorageName = GenerateLambdaConstructorUniqueVariableName(Class, StructProperty->GetName() + TEXT("Storage"));
-                Content += TEXT("FStructOnScope ") + StorageName + TEXT("(") + StructureType + TEXT("::StaticStruct());\n") +
-                    StructureType + TEXT("& ") + StructName + TEXT(" = *reinterpret_cast<") + StructureType + TEXT("*>(") +
-                    StorageName + TEXT(".GetStructMemory());\n");
-            }
-            else
-            {
-                Content += StructureType + TEXT(" ") + StructName + TEXT("{};\n");
-            }
+            Content += StructureType + TEXT(" ") + StructName + TEXT("{};\n");
 		}
 		else
 		{
@@ -1751,7 +1775,6 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
             }
             Request.DestinationExpression = StructName;
             Request.InitializationStage = EStructInitializationStage::NativeConstructor;
-            Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
             Request.Operation = EStructTranslationOperation::PropertyValue;
             NewPropertyName = StructName;
             return Content + UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
@@ -1760,7 +1783,6 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
         {
             FStructOnScope SerializedDefaults(StructProperty->Struct);
             StructProperty->Struct->CopyScriptStruct(SerializedDefaults.GetStructMemory(), PropertyAddress);
-            if (LeftAllAssetRefInBlueprint)
             {
                 for (TFieldIterator<FProperty> Member(StructProperty->Struct); Member; ++Member)
                 {
@@ -1774,7 +1796,6 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
             Request.OwnerExpression = ObjectOuter;
             Request.DestinationExpression = StructName;
             Request.InitializationStage = EStructInitializationStage::NativeConstructor;
-            Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
             Request.Operation = EStructTranslationOperation::PropertyValue;
             NewPropertyName = StructName;
             return Content + UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
@@ -1817,11 +1838,11 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
                     if (!IsAvailibleOneLineDefaultConstructorForProperty(LocalProperty))
                     {
                         Content += GenerateManyLinesDefaultConstructorForProperty(LocalProperty, LocalValue, SuperValue,
-                            EntryNodes, Class, true, LeftAllAssetRefInBlueprint, TEXT(""), Initializer, ObjectOuter);
+                            EntryNodes, Class, true, TEXT(""), Initializer, ObjectOuter);
                     }
                     else
                     {
-                        Initializer = GenerateOneLineDefaultConstructorForProperty(LocalProperty, LeftAllAssetRefInBlueprint, LocalValue, ObjectOuter);
+                        Initializer = GenerateOneLineDefaultConstructorForProperty(LocalProperty, LocalValue, ObjectOuter);
                     }
                     Content += FString::Format(TEXT("{0} = {1};\n"), {Destination, Initializer});
                 }
@@ -1835,14 +1856,14 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
 	{
 		FString ArrayName = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(Class, ArrayProperty->GetName() + TEXT("DefaultValue"));
 		Content += UBlueprintNativizationLibrary::GetPropertyType(ArrayProperty) + TEXT(" ") + ArrayName + TEXT("{};\n");
-		
+
 		void* RawArrayData = ArrayProperty->GetPropertyValuePtr(PropertyAddress);
 		FScriptArrayHelper Helper(ArrayProperty, RawArrayData);
 
 		for (int32 i = 0; i < Helper.Num(); ++i)
 		{
 			FString InsidePropertyName;
-			Content += GenerateManyLinesDefaultConstructorForProperty(ArrayProperty->Inner, Helper.GetRawPtr(i), nullptr, EntryNodes, Class, true, LeftAllAssetRefInBlueprint, "", InsidePropertyName, ObjectOuter);
+			Content += GenerateManyLinesDefaultConstructorForProperty(ArrayProperty->Inner, Helper.GetRawPtr(i), nullptr, EntryNodes, Class, true, "", InsidePropertyName, ObjectOuter);
 			Content += FString::Format(TEXT("{0}.Add({1});\n"), { ArrayName, InsidePropertyName });
 		}
 		NewPropertyName = ArrayName;
@@ -1865,7 +1886,7 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
 			if (Helper.IsValidIndex(Index))
 			{
 				FString InsidePropertyName;
-				Content += GenerateManyLinesDefaultConstructorForProperty(SetProperty->ElementProp, Helper.GetElementPtr(Index), nullptr, EntryNodes, Class, true, LeftAllAssetRefInBlueprint, "", InsidePropertyName, ObjectOuter);
+				Content += GenerateManyLinesDefaultConstructorForProperty(SetProperty->ElementProp, Helper.GetElementPtr(Index), nullptr, EntryNodes, Class, true, "", InsidePropertyName, ObjectOuter);
 				Content += FString::Format(TEXT("{0}.Add({1});\n"), { SetName, InsidePropertyName });
 			}
 		}
@@ -1888,10 +1909,10 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
 			if (Helper.IsValidIndex(Index))
 			{
 				FString InsideKeyPropertyName;
-				Content += GenerateManyLinesDefaultConstructorForProperty(MapProperty->KeyProp, Helper.GetKeyPtr(Index), nullptr, EntryNodes, Class, true, LeftAllAssetRefInBlueprint, "", InsideKeyPropertyName, ObjectOuter);
+				Content += GenerateManyLinesDefaultConstructorForProperty(MapProperty->KeyProp, Helper.GetKeyPtr(Index), nullptr, EntryNodes, Class, true, "", InsideKeyPropertyName, ObjectOuter);
 
 				FString InsideValuePropertyName;
-				Content += GenerateManyLinesDefaultConstructorForProperty(MapProperty->ValueProp, Helper.GetValuePtr(Index), nullptr, EntryNodes, Class, true, LeftAllAssetRefInBlueprint, "", InsideValuePropertyName, ObjectOuter);
+				Content += GenerateManyLinesDefaultConstructorForProperty(MapProperty->ValueProp, Helper.GetValuePtr(Index), nullptr, EntryNodes, Class, true, "", InsideValuePropertyName, ObjectOuter);
 
 				Content += FString::Format(TEXT("{0}.Add({1}, {2});\n"), { MapName, InsideKeyPropertyName, InsideValuePropertyName });
 
@@ -1904,7 +1925,7 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructorForPro
         }
 		return Content;
 	}
-    NewPropertyName = GenerateOneLineDefaultConstructorForProperty(Property, LeftAllAssetRefInBlueprint, PropertyAddress, ObjectOuter);
+    NewPropertyName = GenerateOneLineDefaultConstructorForProperty(Property, PropertyAddress, ObjectOuter);
     return FString();
 }
 
@@ -1914,7 +1935,7 @@ FString UBlueprintNativizationLibrary::ProcessFloatStrings(const FString& Input)
 	const FRegexPattern FloatPattern(TEXT(R"(([-+]?\d+\.\d+))"));
 	FRegexMatcher Matcher(FloatPattern, Result);
 
-	// Массив для хранения найденных совпадений: позиция и исходное значение
+	// РњР°СЃСЃРёРІ РґР»СЏ С…СЂР°РЅРµРЅРёСЏ РЅР°Р№РґРµРЅРЅС‹С… СЃРѕРІРїР°РґРµРЅРёР№: РїРѕР·РёС†РёСЏ Рё РёСЃС…РѕРґРЅРѕРµ Р·РЅР°С‡РµРЅРёРµ
 	struct FMatchInfo
 	{
 		int32 Start;
@@ -1977,7 +1998,7 @@ bool UBlueprintNativizationLibrary::IsNotOnlyHyphenAndBrackets(FString Input)
 	return false;
 }
 
-FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UClass* Class, bool IsConstructorFunction, UK2Node* EntryNode, TArray<FGenerateFunctionStruct> EntryNodes, bool FullInitialize, bool LeftAllAssetRefInBlueprint, FString& OutVariableName)
+FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UClass* Class, bool IsConstructorFunction, UK2Node* EntryNode, TArray<FGenerateFunctionStruct> EntryNodes, bool FullInitialize, FString& OutVariableName)
 {
 	FString Content;
 
@@ -1995,7 +2016,15 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FStri
 	{
 		UScriptStruct* ScriptStruct = Cast<UScriptStruct>(Type.PinSubCategoryObject.Get());
 		if (!ScriptStruct) return "";
-        if (UBlueprintNativizationSettingsLibrary::FindStructTranslator(ScriptStruct))
+        bool bHasClosedMembers = false;
+        if (ScriptStruct->IsNative())
+        {
+            for (TFieldIterator<FProperty> Member(ScriptStruct); Member; ++Member)
+            {
+                bHasClosedMembers |= Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPrivate | CPF_NativeAccessSpecifierProtected);
+            }
+        }
+        if (bHasClosedMembers || UBlueprintNativizationSettingsLibrary::FindStructTranslator(ScriptStruct))
         {
             OutVariableName = Name;
             if (FullInitialize)
@@ -2008,7 +2037,6 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FStri
             Request.SerializedValue = DefaultValue;
             Request.OwnerClass = Class;
             Request.DestinationExpression = OutVariableName;
-            Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
             Request.Operation = EStructTranslationOperation::SerializedValue;
             if (IsConstructorFunction)
             {
@@ -2074,11 +2102,11 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FStri
 			FString InnerVar;
 			if (!IsAvailibleOneLineDefaultConstructorForProperty(Property))
 			{
-				Content += GenerateManyLinesDefaultConstructor(Property->GetName(), InnerPinType, ValueStr, Class, IsConstructorFunction, EntryNode, EntryNodes, true, LeftAllAssetRefInBlueprint, InnerVar);
+				Content += GenerateManyLinesDefaultConstructor(Property->GetName(), InnerPinType, ValueStr, Class, IsConstructorFunction, EntryNode, EntryNodes, true, InnerVar);
 			}
 			else
 			{
-				InnerVar = GenerateOneLineDefaultConstructor(Property->GetName(), InnerPinType, ValueStr, nullptr, LeftAllAssetRefInBlueprint);
+				InnerVar = GenerateOneLineDefaultConstructor(Property->GetName(), InnerPinType, ValueStr, nullptr);
 			}
 
 			Content += FString::Format(TEXT("{0}.{1} = {2};\n"), { StructName, Property->GetNameCPP(), InnerVar });
@@ -2113,7 +2141,7 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FStri
 			FEdGraphPinType CopyType = Type;
 			CopyType.ContainerType = EPinContainerType::None; 
 
-			Content += GenerateManyLinesDefaultConstructor(Name, CopyType, Token.TrimStartAndEnd(), Class, IsConstructorFunction, EntryNode, EntryNodes, true, LeftAllAssetRefInBlueprint, ElemVar);
+			Content += GenerateManyLinesDefaultConstructor(Name, CopyType, Token.TrimStartAndEnd(), Class, IsConstructorFunction, EntryNode, EntryNodes, true, ElemVar);
 			Content += FString::Format(TEXT("{0}.Add({1});\n"), {ContainerName, ElemVar });
 		}
 		OutVariableName = ContainerName;
@@ -2158,9 +2186,9 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FStri
 
 			if (Values.Num() == 2)
 			{
-				Content += GenerateManyLinesDefaultConstructor(Name, CopyTypeKey, Values[0].TrimStartAndEnd(), Class, IsConstructorFunction, EntryNode, EntryNodes, true, LeftAllAssetRefInBlueprint, ElemVarKey);
-				Content += GenerateManyLinesDefaultConstructor(Name, CopyTypeValue, Values[1].TrimStartAndEnd(), Class, IsConstructorFunction, EntryNode, EntryNodes, true, LeftAllAssetRefInBlueprint, ElemVarValue);
-				
+				Content += GenerateManyLinesDefaultConstructor(Name, CopyTypeKey, Values[0].TrimStartAndEnd(), Class, IsConstructorFunction, EntryNode, EntryNodes, true, ElemVarKey);
+				Content += GenerateManyLinesDefaultConstructor(Name, CopyTypeValue, Values[1].TrimStartAndEnd(), Class, IsConstructorFunction, EntryNode, EntryNodes, true, ElemVarValue);
+
 				Content += FString::Format(TEXT("{0}.Add({1}{2});\n"), { ContainerName, ElemVarKey, ElemVarValue });
 			}
 		}
@@ -2170,8 +2198,75 @@ FString UBlueprintNativizationLibrary::GenerateManyLinesDefaultConstructor(FStri
 	return "";
 }
 
-FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UObject* DefaultObject, bool LeftAllAssetRefInBlueprint)
+static FEdGraphPinType ResolveGenerationPinType(FEdGraphPinType Type)
 {
+    if (Type.PinCategory != UEdGraphSchema_K2::PC_Wildcard)
+    {
+        return Type;
+    }
+    if (UNativizationV2Subsystem* Generator = FGenerationGraphContext::GetGenerator())
+    {
+        for (int32 MacroIndex = Generator->CurrentMacroStack.Num() - 1; MacroIndex >= 0; --MacroIndex)
+        {
+            if (const UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Generator->CurrentMacroStack[MacroIndex]))
+            {
+                FEdGraphPinType Resolved = Macro->ResolvedWildcardType;
+                TOptional<FEdGraphPinType> BoundaryType;
+                bool bAmbiguous = false;
+                for (UEdGraphNode* DefinitionNode : Macro->GetMacroGraph()->Nodes)
+                {
+                    const UK2Node_Tunnel* Tunnel = Cast<UK2Node_Tunnel>(DefinitionNode);
+                    if (!Tunnel || Tunnel->IsA<UK2Node_MacroInstance>())
+                    {
+                        continue;
+                    }
+                    for (const UEdGraphPin* DefinitionPin : Tunnel->Pins)
+                    {
+                        if (DefinitionPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Wildcard)
+                        {
+                            continue;
+                        }
+                        UEdGraphPin* InstancePin = Macro->FindPin(DefinitionPin->PinName);
+                        if (!InstancePin || InstancePin->PinType.PinCategory.IsNone() || InstancePin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard)
+                        {
+                            continue;
+                        }
+                        const FEdGraphPinType& Candidate = InstancePin->PinType;
+                        if (BoundaryType.IsSet() && (BoundaryType->PinCategory != Candidate.PinCategory ||
+                            BoundaryType->PinSubCategory != Candidate.PinSubCategory || BoundaryType->PinSubCategoryObject != Candidate.PinSubCategoryObject))
+                        {
+                            bAmbiguous = true;
+                            break;
+                        }
+                        BoundaryType = Candidate;
+                    }
+                }
+                if (bAmbiguous)
+                {
+                    FNativeApiCatalog::AddError(TEXT("Ambiguous original wildcard type in macro instance: ") + Macro->GetPathName());
+                    return Type;
+                }
+                if (BoundaryType.IsSet())
+                {
+                    Resolved = BoundaryType.GetValue();
+                }
+                if (!Resolved.PinCategory.IsNone() && Resolved.PinCategory != UEdGraphSchema_K2::PC_Wildcard)
+                {
+                    Type.PinCategory = Resolved.PinCategory;
+                    Type.PinSubCategory = Resolved.PinSubCategory;
+                    Type.PinSubCategoryObject = Resolved.PinSubCategoryObject;
+                    return Type;
+                }
+            }
+        }
+    }
+    FNativeApiCatalog::AddError(TEXT("Cannot resolve an original wildcard pin type from its macro instance context."));
+    return Type;
+}
+
+FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString Name, FEdGraphPinType Type, FString DefaultValue, UObject* DefaultObject)
+{
+    Type = ResolveGenerationPinType(Type);
 	FString Text = DefaultValue;
 	auto TrimFirstAndLast = [](const FString& Str) -> FString
 		{
@@ -2201,7 +2296,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 		TArray<FString> Elements;
 		for (const FString& Token : Tokens)
 		{
-			Elements.Add(GenerateOneLineDefaultConstructor(Name, LocalType, Token, nullptr, LeftAllAssetRefInBlueprint));
+			Elements.Add(GenerateOneLineDefaultConstructor(Name, LocalType, Token, nullptr));
 		}
 
 		FString Result = TEXT("{") + FString::Join(Elements, TEXT(", ")) + TEXT("}");
@@ -2219,7 +2314,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 		TArray<FString> Elements;
 		for (const FString& Token : Tokens)
 		{
-			Elements.Add(GenerateOneLineDefaultConstructor(Name, LocalType, Token, nullptr, LeftAllAssetRefInBlueprint));
+			Elements.Add(GenerateOneLineDefaultConstructor(Name, LocalType, Token, nullptr));
 		}
 
 		FString Result = TEXT("{") + FString::Join(Elements, TEXT(", ")) + TEXT("}");
@@ -2227,36 +2322,35 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 	}
 	else if (Type.IsMap())
 	{
-		TArray<FString> Pairs;
-		FString WorkingText = Text;
-		Text = TrimFirstAndLast(Text);
-		SplitIgnoringParentheses(Text, Pairs);
-
-
-		while (!WorkingText.IsEmpty())
-		{
-			int32 OpenIdx, CloseIdx;
-			if (WorkingText.FindChar('(', OpenIdx) && WorkingText.FindChar(')', CloseIdx) && CloseIdx > OpenIdx)
-			{
-				FString PairStr = WorkingText.Mid(OpenIdx + 1, CloseIdx - OpenIdx - 1);
-				TArray<FString> KeyValue;
-				PairStr.ParseIntoArray(KeyValue, TEXT(","), true);
-
-				WorkingText = WorkingText.Mid(CloseIdx + 1);
-				WorkingText.TrimStartInline();
-				if (WorkingText.StartsWith(TEXT(",")))
-				{
-					WorkingText.RemoveAt(0);
-					WorkingText.TrimStartInline();
-				}
-			}
-			else
-			{
-				break;
-			}
-		}
-		FString Result = TEXT("{") + FString::Join(Pairs, TEXT(", ")) + TEXT("}");
-		return Result;
+        if (!Text.StartsWith(TEXT("(")) || !Text.EndsWith(TEXT(")")))
+        {
+            return TEXT("{}");
+        }
+        TArray<FString> Pairs;
+        SplitIgnoringParentheses(RemoveBrackets(Text), Pairs);
+        FEdGraphPinType KeyType = Type;
+        KeyType.ContainerType = EPinContainerType::None;
+        FEdGraphPinType ValueType;
+        ValueType.PinCategory = Type.PinValueType.TerminalCategory;
+        ValueType.PinSubCategory = Type.PinValueType.TerminalSubCategory;
+        ValueType.PinSubCategoryObject = Type.PinValueType.TerminalSubCategoryObject;
+        ValueType.bIsConst = Type.PinValueType.bTerminalIsConst;
+        ValueType.bIsWeakPointer = Type.PinValueType.bTerminalIsWeakPointer;
+        TArray<FString> Elements;
+        for (const FString& Pair : Pairs)
+        {
+            TArray<FString> KeyValue;
+            SplitIgnoringParentheses(RemoveBrackets(Pair.TrimStartAndEnd()), KeyValue);
+            if (KeyValue.Num() != 2)
+            {
+                return TEXT("{}");
+            }
+            Elements.Add(TEXT("{") + GenerateOneLineDefaultConstructor(Name, KeyType,
+                KeyValue[0].TrimStartAndEnd(), nullptr) + TEXT(", ") +
+                GenerateOneLineDefaultConstructor(Name, ValueType, KeyValue[1].TrimStartAndEnd(),
+                    nullptr) + TEXT("}"));
+        }
+        return TEXT("{") + FString::Join(Elements, TEXT(", ")) + TEXT("}");
 	}
     else if (Type.PinCategory == UEdGraphSchema_K2::PC_Int64)
     {
@@ -2324,7 +2418,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
         if (Type.PinCategory == UEdGraphSchema_K2::PC_SoftClass)
         {
             UClass* OriginalClass = FindObject<UClass>(nullptr, *AssetPath);
-            if (LeftAllAssetRefInBlueprint && !AssetPath.IsEmpty() && AssetPath != TEXT("None"))
+            if (!AssetPath.IsEmpty() && AssetPath != TEXT("None"))
             {
                 if (!OriginalClass)
                 {
@@ -2343,12 +2437,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
                 return GetPinType(Type, false) + TEXT("(") + FRetainedBlueprintGeneration::GetClassValue(ParentClass) + TEXT(")");
             }
         }
-        if (AssetPath.IsEmpty() || AssetPath == TEXT("None") || LeftAllAssetRefInBlueprint)
-        {
-            return GetPinType(Type, false) + TEXT("{}");
-        }
-        return FString::Format(TEXT("{0}(FSoftObjectPath(TEXT(\"{1}\")))"),
-            { GetPinType(Type, false), AssetPath.ReplaceCharWithEscapedChar() });
+        return GetPinType(Type, false) + TEXT("{}");
     }
 	else if (Type.PinCategory == UEdGraphSchema_K2::PC_Object)
 	{
@@ -2362,16 +2451,8 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
         }
 		if (DefaultObject && DefaultObject->IsAsset())
 		{
-			if (LeftAllAssetRefInBlueprint)
 			{
 				return FString(TEXT("nullptr"));
-			}
-			else
-			{
-				FString AssetPath = FSoftObjectPath(DefaultObject).ToString();
-				RegisterAssetClassInclude(DefaultObject->GetClass());
-				return FString::Format(TEXT("LoadObject<{0}>(nullptr, TEXT(\"{1}\"))"),
-					TArray<FStringFormatArg>{ FStringFormatArg(FRetainedBlueprintGeneration::GetClassName(DefaultObject->GetClass())), FStringFormatArg(AssetPath) });
 			}
 		}
 
@@ -2435,7 +2516,6 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
             FStructTranslationRequest Request;
             Request.Structure = SelectedStructure;
             Request.SerializedValue = DefaultValue;
-            Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
             Request.Operation = EStructTranslationOperation::SerializedValue;
             return UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
         }
@@ -2457,13 +2537,12 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
                 FStructTranslationRequest Request;
                 Request.Structure = SelectedStructure;
                 Request.SerializedValue = DefaultValue;
-                Request.bKeepAssetReferencesInBlueprint = LeftAllAssetRefInBlueprint;
                 Request.Operation = EStructTranslationOperation::SerializedValue;
                 return UBlueprintNativizationSettingsLibrary::TranslateStructure(Request);
             }
             FString ValueName;
             FString Initializer = GenerateManyLinesDefaultConstructor(TEXT("StructureValue"), Type, DefaultValue,
-                nullptr, false, nullptr, {}, false, LeftAllAssetRefInBlueprint, ValueName);
+                nullptr, false, nullptr, {}, false, ValueName);
             return TEXT("([]()\n{\n") + TypeName + TEXT(" StructureValue{};\n") + Initializer + TEXT("return StructureValue;\n}())");
         }
 		FString Result = "";
@@ -2502,7 +2581,7 @@ FString UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(FString
 
 			if (!PropertyValue.IsEmpty())
 			{
-                FString Argument = GenerateOneLineDefaultConstructor(PropertyName.ToString(), OutPinType, PropertyValue, nullptr, LeftAllAssetRefInBlueprint);
+                FString Argument = GenerateOneLineDefaultConstructor(PropertyName.ToString(), OutPinType, PropertyValue, nullptr);
                 if (Property->IsA<FArrayProperty>() || Property->IsA<FSetProperty>() || Property->IsA<FMapProperty>())
                 {
                     Argument = GetPropertyType(Property) + Argument;
@@ -2539,14 +2618,14 @@ UField* UBlueprintNativizationLibrary::FindFieldByStableIdentifier(const FString
 		return nullptr;
 	}
 
-	// Ожидается формат: PackageName.FieldName
+	// РћР¶РёРґР°РµС‚СЃСЏ С„РѕСЂРјР°С‚: PackageName.FieldName
 	FString PackageName, FieldName;
 	if (!Identifier.Split(TEXT("."), &PackageName, &FieldName, ESearchCase::IgnoreCase, ESearchDir::FromEnd))
 	{
-		return nullptr; // Неверный формат
+		return nullptr; // РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚
 	}
 
-	// Попытка загрузить пакет
+	// РџРѕРїС‹С‚РєР° Р·Р°РіСЂСѓР·РёС‚СЊ РїР°РєРµС‚
 	UPackage* Package = FindPackage(nullptr, *PackageName);
 	if (!Package)
 	{
@@ -2935,14 +3014,14 @@ FString UBlueprintNativizationLibrary::ExtractNestedParam(const FString& Input, 
 	if (StartIndex == INDEX_NONE)
 		return TEXT("");
 
-	// Найти индекс первой скобки после =
+	// РќР°Р№С‚Рё РёРЅРґРµРєСЃ РїРµСЂРІРѕР№ СЃРєРѕР±РєРё РїРѕСЃР»Рµ =
 	int32 EqualIndex = Input.Find(TEXT("="), ESearchCase::IgnoreCase, ESearchDir::FromStart, StartIndex);
 	if (EqualIndex == INDEX_NONE || EqualIndex + 1 >= Input.Len())
 		return TEXT("");
 
 	if (Input[EqualIndex + 1] != '(')
 	{
-		// Не вложенная структура — просто значение
+		// РќРµ РІР»РѕР¶РµРЅРЅР°СЏ СЃС‚СЂСѓРєС‚СѓСЂР° вЂ” РїСЂРѕСЃС‚Рѕ Р·РЅР°С‡РµРЅРёРµ
 		int32 EndIndex = Input.Find(TEXT(")"), ESearchCase::IgnoreCase, ESearchDir::FromStart, EqualIndex);
 		if (EndIndex == INDEX_NONE)
 			return Input.Mid(EqualIndex + 1).TrimStartAndEnd();
@@ -2950,7 +3029,7 @@ FString UBlueprintNativizationLibrary::ExtractNestedParam(const FString& Input, 
 			return Input.Mid(EqualIndex + 1, EndIndex - EqualIndex - 1).TrimStartAndEnd();
 	}
 
-	// Найдена вложенная структура — ищем соответствующую закрывающую скобку
+	// РќР°Р№РґРµРЅР° РІР»РѕР¶РµРЅРЅР°СЏ СЃС‚СЂСѓРєС‚СѓСЂР° вЂ” РёС‰РµРј СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‰СѓСЋ Р·Р°РєСЂС‹РІР°СЋС‰СѓСЋ СЃРєРѕР±РєСѓ
 	int32 OpenParens = 0;
 	int32 EndIndex = -1;
 
@@ -2973,7 +3052,7 @@ FString UBlueprintNativizationLibrary::ExtractNestedParam(const FString& Input, 
 
 	if (EndIndex != -1)
 	{
-		return Input.Mid(EqualIndex + 1, EndIndex - EqualIndex).TrimStartAndEnd(); // включая скобки
+		return Input.Mid(EqualIndex + 1, EndIndex - EqualIndex).TrimStartAndEnd(); // РІРєР»СЋС‡Р°СЏ СЃРєРѕР±РєРё
 	}
 
 	return TEXT(""); 
@@ -3370,7 +3449,7 @@ EConversionPropertyFlag UBlueprintNativizationLibrary::GetConversionPropertyFlag
 	if (!Property) return EConversionPropertyFlag::ConvertToCPP;
 	if (!Blueprint) return EConversionPropertyFlag::ConvertToCPP;
 
-	
+
 	if (FBPVariableDescription* OutVariableDescription = UBlueprintNativizationLibrary::GetVariableDescriptionByPropertyAndBlueprint(Property, Blueprint))
 	{
 		if (!OutVariableDescription->HasMetaData(TEXT("ConversionPropertyFlag")))
@@ -3442,7 +3521,7 @@ TArray<UEdGraphPin*> UBlueprintNativizationLibrary::GetFilteredPins(
 		}
 
 
-		// ���������� �� �����������
+		// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 		const bool bIsInput = Pin->Direction == EGPD_Input;
 		const bool bIsOutput = Pin->Direction == EGPD_Output;
 		bool bDirectionPass = false;
@@ -3485,7 +3564,7 @@ TArray<UEdGraphPin*> UBlueprintNativizationLibrary::GetFilteredPins(
 			}
 		}
 
-		// Exclude ������
+		// Exclude пїЅпїЅпїЅпїЅпїЅпїЅ
 		if (((ExcludeFlags & EPinExcludeFilter::ExecPin) != EPinExcludeFilter::None) && bIsExec)
 		{
 			continue;
@@ -3642,7 +3721,6 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 
     if (UNativizationV2Subsystem* Generator = FGenerationGraphContext::GetGenerator())
     {
-        bIgnoreMacro = false;
         if (!NativizationV2Subsystem)
         {
             NativizationV2Subsystem = Generator;
@@ -3650,13 +3728,28 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
     }
     if (UK2Node* ContextNode = Cast<UK2Node>(Pin->GetOwningNode()))
     {
-        const TArray<UK2Node*> ContextStack = FGenerationGraphContext::GetMacroStack(ContextNode);
-        if (!ContextStack.IsEmpty())
+        if (MacroStack.IsEmpty())
         {
-            MacroStack = ContextStack;
+            MacroStack = FGenerationGraphContext::GetMacroStack(ContextNode);
+        }
+        else
+        {
+            for (int32 MacroIndex = 0; MacroIndex < MacroStack.Num(); ++MacroIndex)
+            {
+                if (MacroStack[MacroIndex]->GetGraph() == ContextNode->GetGraph())
+                {
+                    MacroStack.SetNum(MacroIndex);
+                    break;
+                }
+                if (FGenerationGraphContext::GetMacroGraph(MacroStack[MacroIndex]) == ContextNode->GetGraph())
+                {
+                    MacroStack.SetNum(MacroIndex + 1);
+                    break;
+                }
+            }
         }
     }
-	TSet<UEdGraphPin*> Visited;
+	TSet<FString> Visited;
 	UEdGraphPin* CurrentPin = Pin;
 
 	if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
@@ -3688,9 +3781,18 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 		}
 	}
 
-	while (CurrentPin && !Visited.Contains(CurrentPin))
-	{
-		Visited.Add(CurrentPin);
+    auto GetTraversalKey = [&MacroStack](const UEdGraphPin* Current)
+    {
+        FString Key = Current->GetOwningNode()->GetPathName() + TEXT(":") + Current->PinId.ToString();
+        for (UK2Node* Macro : MacroStack)
+        {
+            Key += TEXT(":") + Macro->GetPathName();
+        }
+        return Key;
+    };
+    while (CurrentPin && !Visited.Contains(GetTraversalKey(CurrentPin)))
+    {
+        Visited.Add(GetTraversalKey(CurrentPin));
 		UK2Node* Node = Cast<UK2Node>(CurrentPin->GetOwningNode());
 		if (!Node)
 		{
@@ -3705,12 +3807,6 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 			{
 				if (NativizationV2Subsystem)
 				{
-					FGenerateFunctionStruct GenerateFunctionStruct;
-					if (UBlueprintNativizationDataLibrary::FindGenerateFunctionStructByNode(NativizationV2Subsystem->EntryNodes, Node, GenerateFunctionStruct))
-					{
-						return CurrentPin;
-					}
-
 					if (NativizationV2Subsystem->FindTranslatorForNode(Node))
 					{
 						return CurrentPin;
@@ -3720,7 +3816,15 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 				UEdGraph* MacroGraph = FGenerationGraphContext::GetMacroGraph(MacroNode);
 				if (MacroGraph)
 				{
-					MacroStack.Add(MacroNode);
+                    if (MacroStack.ContainsByPredicate([MacroGraph](UK2Node* ActiveMacro)
+                    {
+                        return FGenerationGraphContext::GetMacroGraph(ActiveMacro) == MacroGraph;
+                    }))
+                    {
+                        FNativeApiCatalog::AddError(TEXT("Recursive macro definition: ") + MacroGraph->GetPathName());
+                        return nullptr;
+                    }
+                    MacroStack.Add(MacroNode);
 
 					TArray<UK2Node_Tunnel*> Tunnels;
 					MacroGraph->GetNodesOfClass<UK2Node_Tunnel>(Tunnels);
@@ -3732,7 +3836,7 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 								TunnelPin->PinName == CurrentPin->PinName)
 							{
 								CurrentPin = TunnelPin;
-	
+
 								bProcessedMacro = true;
 								break;
 							}
@@ -3742,7 +3846,7 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 					}
 				}
 			}
-			// Композитный узел (Custom event graph)
+			// РљРѕРјРїРѕР·РёС‚РЅС‹Р№ СѓР·РµР» (Custom event graph)
 			else if (UK2Node_Composite* CompositeNode = Cast<UK2Node_Composite>(Node))
 			{
 				if (UEdGraph* CompositeGraph = FGenerationGraphContext::GetMacroGraph(CompositeNode))
@@ -3818,9 +3922,9 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetFirstNonKnotPin(UEdGraphPin* Pin,
 			OutPins = UBlueprintNativizationLibrary::GetFilteredPins(Node, EPinOutputOrInputFilter::Input, EPinExcludeFilter::ExecPin, EPinIncludeOnlyFilter::None);
 		}
 
-		if (OutPins.Num() > 0 && OutPins[0]->LinkedTo.Num() > Index)
+		if (OutPins.Num() > 0 && OutPins[0]->LinkedTo.Num() > 0)
 		{
-			CurrentPin = OutPins[0]->LinkedTo[Index];
+			CurrentPin = OutPins[0]->LinkedTo[0];
 		}
 		else
 		{
@@ -4373,6 +4477,24 @@ FString UBlueprintNativizationLibrary::GetUniquePropertyComponentGetterName(UAct
 	}
 	else
 	{
+        if (!FindSCSNodeForComponent(ActorComponent))
+        {
+            UClass* NativeOwner = OwnerClass;
+            while (NativeOwner && !NativeOwner->HasAnyClassFlags(CLASS_Native))
+            {
+                NativeOwner = NativeOwner->GetSuperClass();
+            }
+            if (NativeOwner && NativeOwner->GetDefaultObject()->GetDefaultSubobjectByName(ActorComponent->GetFName()))
+            {
+                FString Include;
+                if (GEngine->GetEngineSubsystem<UNativizationV2Subsystem>()->GetIncludeFromField(ActorComponent->GetClass(), Include))
+                {
+                    FNativeGenerationContext::AddImplementationInclude(Include);
+                }
+                return TEXT("Cast<") + FRetainedBlueprintGeneration::GetClassName(ActorComponent->GetClass()) +
+                    TEXT(">(GetDefaultSubobjectByName(FName(") + FRetainedBlueprintGeneration::Quote(ActorComponent->GetName()) + TEXT(")))");
+            }
+        }
         if (ComponentPropertyName)
         {
             *ComponentPropertyName = Name.ToString();
@@ -4507,8 +4629,23 @@ TArray<FString> UBlueprintNativizationLibrary::OpenFileDialog(FString FileTypes)
 }
 
 
+bool UBlueprintNativizationLibrary::IsExternalEnum(const UEnum* Enumeration)
+{
+    return Enumeration && !Enumeration->IsNative() &&
+        !FEngineAssetPolicy::GetExclusionReason(Enumeration,
+            GetDefault<UBlueprintNativizationV2EditorSettings>()->bExcludeEngineAssetsFromConversion).IsEmpty();
+}
+
 FString UBlueprintNativizationLibrary::GetPinType(FEdGraphPinType& PinType, bool HideUselessTypeDeclaration)
 {
+    if (PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard)
+    {
+        FEdGraphPinType Resolved = ResolveGenerationPinType(PinType);
+        if (Resolved.PinCategory != UEdGraphSchema_K2::PC_Wildcard)
+        {
+            return GetPinType(Resolved, HideUselessTypeDeclaration);
+        }
+    }
     if (PinType.IsContainer())
     {
         FEdGraphPinType ElementType = PinType;
@@ -4535,6 +4672,10 @@ FString UBlueprintNativizationLibrary::GetPinType(FEdGraphPinType& PinType, bool
     }
     if (UEnum* Enumeration = Cast<UEnum>(PinType.PinSubCategoryObject.Get()))
     {
+        if (IsExternalEnum(Enumeration))
+        {
+            return TEXT("uint8");
+        }
         FString EnumType = GetUniqueFieldName(Enumeration);
         if (!Enumeration->CppType.IsEmpty())
         {
@@ -4596,13 +4737,16 @@ FString UBlueprintNativizationLibrary::GetPinType(FEdGraphPinType& PinType, bool
             }
 			if (Category == UEdGraphSchema_K2::PC_Class && SubCategoryObject)
 			{
+                FStructTranslationResult Requirements;
+                Requirements.HeaderIncludes.Add(TEXT("Templates/SubclassOf.h"));
+                FNativeGenerationContext::AddRequirements(Requirements);
 				return FString::Format(TEXT("TSubclassOf<{0}>"), { FRetainedBlueprintGeneration::GetClassName(Cast<UClass>(SubCategoryObject))});
 			}
 			if (Category == UEdGraphSchema_K2::PC_Enum && SubCategoryObject)
 			{
 				return FString::Format(TEXT("TEnumAsByte<{0}>"), { UBlueprintNativizationLibrary::GetUniqueFieldName(SubCategoryObject->GetClass()) });
 			}
-			return Category.ToString(); // ������� ���
+			return Category.ToString(); // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ
 		};
 
 	if (PinType.PinSubCategoryObject.IsValid())
@@ -4610,7 +4754,7 @@ FString UBlueprintNativizationLibrary::GetPinType(FEdGraphPinType& PinType, bool
 		return GetTypeName(PinType.PinCategory, PinType.PinSubCategoryObject.Get());
 	}
 
-	// ������� ���
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ
 	if (HideUselessTypeDeclaration)
 	{
 		return "";
@@ -4710,6 +4854,9 @@ FString UBlueprintNativizationLibrary::GetPropertyType(FProperty* Property)
 	}
 	else if (FClassProperty* ClassProperty = CastField<FClassProperty>(Property))
 	{
+                FStructTranslationResult Requirements;
+                Requirements.HeaderIncludes.Add(TEXT("Templates/SubclassOf.h"));
+                FNativeGenerationContext::AddRequirements(Requirements);
 		return FString::Format(
 			TEXT("TSubclassOf<{0}>"),
 			{ FRetainedBlueprintGeneration::GetClassName(ClassProperty->MetaClass) }
@@ -4728,6 +4875,10 @@ FString UBlueprintNativizationLibrary::GetPropertyType(FProperty* Property)
 	{
 		if (EnumProperty->GetEnum())
 		{
+            if (IsExternalEnum(EnumProperty->GetEnum()))
+            {
+                return TEXT("uint8");
+            }
 			if (!EnumProperty->GetEnum()->CppType.IsEmpty())
             {
                 return EnumProperty->GetCPPType(nullptr, 0);
@@ -4743,6 +4894,10 @@ FString UBlueprintNativizationLibrary::GetPropertyType(FProperty* Property)
 	{
 		if (ByteProperty->Enum)
 		{
+            if (IsExternalEnum(ByteProperty->Enum))
+            {
+                return TEXT("uint8");
+            }
 			if (!ByteProperty->Enum->CppType.IsEmpty())
             {
                 return ByteProperty->GetCPPType(nullptr, 0);
@@ -4770,9 +4925,10 @@ FString UBlueprintNativizationLibrary::GetPropertyType(FProperty* Property)
 		FString ExtendType;
 		FString Type = Property->GetCPPType(&ExtendType, 0U);
 
-		const bool bIsReference = Property->HasAnyPropertyFlags(CPF_ReferenceParm) ||
-			(Property->HasAnyPropertyFlags(CPF_OutParm) && !Property->HasAnyPropertyFlags(CPF_ReturnParm));
-		const bool bIsConst = Property->HasAnyPropertyFlags(CPF_ConstParm);
+		const bool bIsFunctionParameter = Property->GetOwner<UFunction>() && Property->HasAnyPropertyFlags(CPF_Parm);
+		const bool bIsReference = bIsFunctionParameter && (Property->HasAnyPropertyFlags(CPF_ReferenceParm) ||
+			(Property->HasAnyPropertyFlags(CPF_OutParm) && !Property->HasAnyPropertyFlags(CPF_ReturnParm)));
+		const bool bIsConst = bIsFunctionParameter && Property->HasAnyPropertyFlags(CPF_ConstParm);
 
 		FString FinalType;
 
@@ -5035,7 +5191,7 @@ UEdGraphPin* UBlueprintNativizationLibrary::GetParentPin(UEdGraphPin* Pin)
 TArray<UEdGraphPin*> UBlueprintNativizationLibrary::GetParentPathPins(UEdGraphPin* ChildPin)
 {
 	TArray<UEdGraphPin*> ResultArray;
-	
+
 	while (ChildPin)
 	{
 		ResultArray.Add(ChildPin);
@@ -5176,6 +5332,10 @@ FString UBlueprintNativizationLibrary::GetEnumValueName(const UEnum* Enumeration
 
 FString UBlueprintNativizationLibrary::GenerateEnumLiteral(const UEnum* Enumeration, int64 Value)
 {
+    if (IsExternalEnum(Enumeration))
+    {
+        return FString::Format(TEXT("uint8({0})"), {Value});
+    }
     const FString Enumerator = GetEnumValueName(Enumeration, Value);
     const FString TypeName = GetUniqueFieldName(const_cast<UEnum*>(Enumeration));
     if (!Enumerator.IsEmpty())

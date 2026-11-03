@@ -158,6 +158,7 @@ public:
     void BeginNameLookup();
     void EndNameLookup();
     bool IsFieldNameUsed(FName Name);
+    bool IsPersistentPinVariable(UEdGraphPin* Pin) const;
 
 	TArray<FName> GetAllFunctionNames(UClass* Class);
 
@@ -165,7 +166,6 @@ public:
 
 	FName GetUniqueFunctionName_Internal(UK2Node* EntryNode, FString BaseFunctionName);
 
-	void RegisterFunctionAlias(UK2Node* OriginalNode, UK2Node* ExpandedNode);
 
 	FName GetUniqueFunctionName(UFunction* Function, FString PredictName);
 
@@ -204,8 +204,11 @@ public:
 private:
     FString GetModuleQualifiedFieldName(UField* Field, const FString& BaseName);
     FString GetSourceNameConflict(UField* Field, const FString& Name) const;
+    bool IsReflectedFieldNameUsed(UField* Field, const FString& Name) const;
+    const FPropertyNamePair* FindPersistentPinVariable(UEdGraphPin* Pin) const;
     bool bNameLookupActive = false;
     TSet<FName> NativeFieldNames;
+    TSet<FName> NativeReflectedFieldNames;
     TMap<FString, FString> SourceNameConflicts;
     TMap<FString, FName> PreviousFieldNames;
 };

@@ -42,7 +42,6 @@ struct FStructTranslationRequest
     FString OwnerExpression;
     FString DestinationExpression;
     EStructInitializationStage InitializationStage = EStructInitializationStage::Value;
-    bool bKeepAssetReferencesInBlueprint = false;
     FString SerializedValue;
     FString SourceExpression;
     FString DestinationType;

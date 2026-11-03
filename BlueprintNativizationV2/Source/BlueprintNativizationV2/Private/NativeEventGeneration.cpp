@@ -9,6 +9,76 @@
 #include "UObject/UnrealType.h"
 #include "NativeApiCatalog.h"
 #include "GeneratedCodeCleanup.h"
+#include "BlueprintNativizationUniqueNameSubsystem.h"
+#include "Engine/Engine.h"
+
+TSharedPtr<FJsonObject> FNativeEventGeneration::FindImplementation(const UFunction* Function)
+{
+    UFunction* RootFunction = UBlueprintNativizationLibrary::GetRootFunctionDeclaration(Function);
+    if (!RootFunction || !RootFunction->GetOwnerClass()->HasAnyClassFlags(CLASS_Native) ||
+        !RootFunction->HasAllFunctionFlags(FUNC_Native | FUNC_BlueprintEvent))
+    {
+        return nullptr;
+    }
+    const TSharedPtr<FJsonObject> Type = FNativeApiCatalog::FindType(RootFunction->GetOwnerClass());
+    if (!Type)
+    {
+        return nullptr;
+    }
+    TSharedPtr<FJsonObject> Implementation;
+    for (const TSharedPtr<FJsonValue>& Value : Type->GetArrayField(TEXT("Callables")))
+    {
+        const TSharedPtr<FJsonObject> Candidate = Value->AsObject();
+        if (Candidate->GetStringField(TEXT("Name")) != RootFunction->GetName() + TEXT("_Implementation") ||
+            !Candidate->GetBoolField(TEXT("Virtual")) || Candidate->GetBoolField(TEXT("Static")) ||
+            Candidate->GetBoolField(TEXT("Deleted")) || !Candidate->GetBoolField(TEXT("AccessVerified")) ||
+            Candidate->GetIntegerField(TEXT("Access")) == 3)
+        {
+            continue;
+        }
+        bool bUnconditional = true;
+        for (const TSharedPtr<FJsonValue>& Evidence : Candidate->GetArrayField(TEXT("Evidence")))
+        {
+            if (!Evidence->AsObject()->GetStringField(TEXT("Condition")).IsEmpty())
+            {
+                bUnconditional = false;
+                break;
+            }
+        }
+        if (!bUnconditional)
+        {
+            continue;
+        }
+        int32 ParameterCount = 0;
+        for (TFieldIterator<FProperty> Parameter(RootFunction); Parameter && Parameter->HasAnyPropertyFlags(CPF_Parm); ++Parameter)
+        {
+            if (!Parameter->HasAnyPropertyFlags(CPF_ReturnParm))
+            {
+                ++ParameterCount;
+            }
+        }
+        if (Candidate->GetArrayField(TEXT("Parameters")).Num() != ParameterCount)
+        {
+            continue;
+        }
+        if (Implementation)
+        {
+            FNativeApiCatalog::AddError(TEXT("Native event implementation is ambiguous: ") + RootFunction->GetPathName());
+            return nullptr;
+        }
+        Implementation = Candidate;
+    }
+    return Implementation;
+}
+
+bool FNativeEventGeneration::IsImplementationConst(const UFunction* Function, const UClass* GeneratedClass)
+{
+    if (const TSharedPtr<FJsonObject> Implementation = FindImplementation(Function))
+    {
+        return Implementation->GetBoolField(TEXT("Const"));
+    }
+    return Function->HasAnyFunctionFlags(FUNC_Const) || GeneratedClass->HasAnyClassFlags(CLASS_Const);
+}
 
 static UFunction* GetDispatchedNativeEvent(UBlueprint* Blueprint, const FGenerateFunctionStruct& Entry)
 {
@@ -82,6 +152,147 @@ FString FNativeEventGeneration::GenerateConstructor(UBlueprint* Blueprint, const
     return Code;
 }
 
+static bool CompleteEnvironmentQueryContext(UBlueprint* Blueprint, FString& Header, FString& Source)
+{
+    UClass* ContextBase = FindObject<UClass>(nullptr, TEXT("/Script/AIModule.EnvQueryContext_BlueprintBase"));
+    if (!ContextBase || !Blueprint->GeneratedClass->IsChildOf(ContextBase))
+    {
+        return false;
+    }
+    UClass* NativeParent = Blueprint->GeneratedClass->GetSuperClass();
+    while (NativeParent && !NativeParent->HasAnyClassFlags(CLASS_Native))
+    {
+        NativeParent = NativeParent->GetSuperClass();
+    }
+    if (NativeParent != ContextBase)
+    {
+        return false;
+    }
+    const TArray<FString> Events = {TEXT("ProvideSingleActor"), TEXT("ProvideSingleLocation"),
+        TEXT("ProvideActorsSet"), TEXT("ProvideLocationsSet")};
+    TArray<bool> ImplementedModes;
+    ImplementedModes.Init(false, Events.Num());
+    for (int32 ModeIndex = 0; ModeIndex < Events.Num(); ++ModeIndex)
+    {
+        for (UClass* Layer = Blueprint->GeneratedClass; Layer && Layer != ContextBase; Layer = Layer->GetSuperClass())
+        {
+            UBlueprint* LayerBlueprint = Cast<UBlueprint>(Layer->ClassGeneratedBy);
+            if (LayerBlueprint && UBlueprintNativizationLibrary::FindEntryNodeByFunctionName(LayerBlueprint, FName(*Events[ModeIndex])))
+            {
+                ImplementedModes[ModeIndex] = true;
+                break;
+            }
+        }
+    }
+    const FString ClassName = UBlueprintNativizationLibrary::GetUniqueFieldName(Blueprint->GeneratedClass);
+    Header.InsertAt(Header.Find(TEXT("};"), ESearchCase::CaseSensitive, ESearchDir::FromEnd),
+        TEXT("public:\nvirtual UWorld* GetWorld() const override;\n")
+        TEXT("virtual void ProvideContext(FEnvQueryInstance& QueryInstance, FEnvQueryContextData& ContextData) const override;\n"));
+    Source += TEXT("\nUWorld* ") + ClassName + TEXT("::GetWorld() const\n{\ncheck(GetOuter());\n")
+        TEXT("if (UEnvQueryManager* QueryManager = Cast<UEnvQueryManager>(GetOuter()))\n{\nreturn QueryManager->GetWorld();\n}\nreturn nullptr;\n}\n");
+    Source += TEXT("\nvoid ") + ClassName + TEXT("::ProvideContext(FEnvQueryInstance& QueryInstance, FEnvQueryContextData& ContextData) const\n{\n")
+        TEXT("UObject* QuerierObject = QueryInstance.Owner.Get();\nif (!QuerierObject)\n{\nreturn;\n}\n")
+        TEXT("AActor* QuerierActor = Cast<AActor>(QuerierObject);\nint32 ContextMode = INDEX_NONE;\nUFunction* ContextFunction = nullptr;\n");
+    for (int32 ModeIndex = 0; ModeIndex < Events.Num(); ++ModeIndex)
+    {
+        Source += TEXT("{\nUFunction* CandidateFunction = FindFunctionChecked(FName(TEXT(\"") + Events[ModeIndex] + TEXT("\")));\n");
+        if (!ImplementedModes[ModeIndex])
+        {
+            Source += TEXT("if (CandidateFunction->GetOuterUClass() != UEnvQueryContext_BlueprintBase::StaticClass())\n{\n");
+        }
+        Source += TEXT("ContextMode = ") + FString::FromInt(ModeIndex) + TEXT(";\nContextFunction = CandidateFunction;\n");
+        if (!ImplementedModes[ModeIndex])
+        {
+            Source += TEXT("}\n");
+        }
+        Source += TEXT("}\n");
+    }
+    Source += TEXT("switch (ContextMode)\n{\n");
+    const TArray<FString> ResultTypes = {TEXT("AActor*"), TEXT("FVector"), TEXT("TArray<AActor*>"), TEXT("TArray<FVector>")};
+    const TArray<FString> InitialValues = {TEXT("nullptr"), TEXT("FAISystem::InvalidLocation"), TEXT("{}"), TEXT("{}")};
+    for (int32 ModeIndex = 0; ModeIndex < Events.Num(); ++ModeIndex)
+    {
+        Source += TEXT("case ") + FString::FromInt(ModeIndex) + TEXT(":\n{\nstruct FContextEventParameters\n{\nUObject* QuerierObject;\nAActor* QuerierActor;\n") +
+            ResultTypes[ModeIndex] + TEXT(" Result;\n};\nFContextEventParameters Parameters{QuerierObject, QuerierActor, ") + InitialValues[ModeIndex] + TEXT("};\n") +
+            TEXT("const_cast<") + ClassName + TEXT("*>(this)->ProcessEvent(ContextFunction, &Parameters);\n");
+        if (ModeIndex == 0)
+        {
+            Source += TEXT("if (Parameters.Result)\n{\nUEnvQueryItemType_Actor::SetContextHelper(ContextData, Parameters.Result);\n}\n");
+        }
+        else if (ModeIndex == 1)
+        {
+            Source += TEXT("if (FAISystem::IsValidLocation(Parameters.Result))\n{\nUEnvQueryItemType_Point::SetContextHelper(ContextData, Parameters.Result);\n}\n");
+        }
+        else if (ModeIndex == 2)
+        {
+            Source += TEXT("Parameters.Result.Remove(nullptr);\nif (!Parameters.Result.IsEmpty())\n{\nUEnvQueryItemType_Actor::SetContextHelper(ContextData, Parameters.Result);\n}\n");
+        }
+        else
+        {
+            Source += TEXT("Parameters.Result.RemoveAll([](const FVector& Location)\n{\nreturn !FAISystem::IsValidLocation(Location);\n});\n")
+                TEXT("if (!Parameters.Result.IsEmpty())\n{\nUEnvQueryItemType_Point::SetContextHelper(ContextData, Parameters.Result);\n}\n");
+        }
+        Source += TEXT("break;\n}\n");
+    }
+    Source += TEXT("default:\n{\nbreak;\n}\n}\n}\n");
+    FStructTranslationResult Requirements;
+    Requirements.HeaderIncludes = {TEXT("AITypes.h"), TEXT("EnvironmentQuery/EnvQueryTypes.h"), TEXT("UObject/Class.h"),
+        TEXT("EnvironmentQuery/EnvQueryManager.h"), TEXT("EnvironmentQuery/Items/EnvQueryItemType_Actor.h"),
+        TEXT("EnvironmentQuery/Items/EnvQueryItemType_Point.h"), TEXT("GameFramework/Actor.h")};
+    Requirements.ModuleDependencies.Add(TEXT("AIModule"));
+    FNativeGenerationContext::AddRequirements(Requirements);
+    return true;
+}
+
+static void CompleteEnvironmentQueryGeneratorContracts(UBlueprint* Blueprint,
+    const TArray<FGenerateFunctionStruct>& Entries, FString& Header, FString& Source)
+{
+    UClass* GeneratorBase = FindObject<UClass>(nullptr, TEXT("/Script/AIModule.EnvQueryGenerator_BlueprintBase"));
+    UClass* NativeParent = Blueprint->GeneratedClass->GetSuperClass();
+    while (NativeParent && !NativeParent->HasAnyClassFlags(CLASS_Native))
+    {
+        NativeParent = NativeParent->GetSuperClass();
+    }
+    if (!GeneratorBase || NativeParent != GeneratorBase)
+    {
+        return;
+    }
+    TArray<FString> Contracts;
+    for (const FGenerateFunctionStruct& Entry : Entries)
+    {
+        UFunction* Event = GetDispatchedNativeEvent(Blueprint, Entry);
+        if (Event && Event->GetOwnerClass() == GeneratorBase &&
+            (Event->GetFName() == TEXT("DoItemGeneration") || Event->GetFName() == TEXT("DoItemGenerationFromActors")))
+        {
+            Contracts.AddUnique(TEXT("FName(") + FRetainedBlueprintGeneration::Quote(Event->GetName()) + TEXT(")"));
+        }
+    }
+    if (Contracts.IsEmpty())
+    {
+        return;
+    }
+    const FString ClassName = UBlueprintNativizationLibrary::GetUniqueFieldName(Blueprint->GeneratedClass);
+    const FString Registration = UBlueprintNativizationLibrary::GenerateLambdaConstructorUniqueVariableName(
+        Blueprint->GeneratedClass, TEXT("RegisterGeneratorContracts"));
+    const FString Constructor = ClassName + TEXT("::") + ClassName + TEXT("(const FObjectInitializer& ObjectInitializer) : Super(ObjectInitializer)");
+    if (!Source.Contains(Constructor))
+    {
+        FNativeApiCatalog::AddError(TEXT("Cannot register EQS generator event contracts before the native parent constructor: ") + ClassName);
+        return;
+    }
+    Source.ReplaceInline(*Constructor, *(ClassName + TEXT("::") + ClassName +
+        TEXT("(const FObjectInitializer& ObjectInitializer) : Super(") + Registration + TEXT("(ObjectInitializer))")));
+    Header.InsertAt(Header.Find(TEXT("};"), ESearchCase::CaseSensitive, ESearchDir::FromEnd),
+        TEXT("private:\nstatic const FObjectInitializer& ") + Registration + TEXT("(const FObjectInitializer& ObjectInitializer);\n"));
+    Source += TEXT("\nconst FObjectInitializer& ") + ClassName + TEXT("::") + Registration +
+        TEXT("(const FObjectInitializer& ObjectInitializer)\n{\nstatic FCriticalSection RegistrationMutex;\nFScopeLock RegistrationLock(&RegistrationMutex);\nUClass* GeneratorClass = ") +
+        ClassName + TEXT("::StaticClass();\nfor (const FName EventName : {") + FString::Join(Contracts, TEXT(", ")) +
+        TEXT("})\n{\nif (!GeneratorClass->FindFunctionByName(EventName, EIncludeSuperFlag::ExcludeSuper))\n{\nUFunction* ParentContract = UEnvQueryGenerator_BlueprintBase::StaticClass()->FindFunctionByName(EventName);\nUFunction* Contract = DuplicateObject<UFunction>(ParentContract, GeneratorClass, EventName);\nContract->SetSuperStruct(ParentContract);\nGeneratorClass->AddFunctionToFunctionMap(Contract, EventName);\n}\n}\nObjectInitializer.GetClass()->ClearFunctionMapsCaches();\nreturn ObjectInitializer;\n}\n");
+    FNativeGenerationContext::AddImplementationInclude(TEXT("#include \"HAL/CriticalSection.h\""));
+    FNativeGenerationContext::AddImplementationInclude(TEXT("#include \"Misc/ScopeLock.h\""));
+    FNativeGenerationContext::AddImplementationInclude(TEXT("#include \"UObject/UObjectGlobals.h\""));
+}
+
 void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGenerateFunctionStruct>& Entries,
     FString& Header, FString& Source)
 {
@@ -94,6 +305,7 @@ void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGener
         TMap<FString, FString> Implementations;
         TArray<TPair<UFunction*, FString>> Events;
     };
+    const bool bHasEnvironmentQueryAdapter = CompleteEnvironmentQueryContext(Blueprint, Header, Source);
     TMap<FString, FEventOverride> Overrides;
     TSet<FName> AdaptedEvents;
     FStructTranslationResult OverrideRequirements;
@@ -101,6 +313,10 @@ void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGener
     {
         UFunction* Event = GetDispatchedNativeEvent(Blueprint, Entry);
         if (!Event || AdaptedEvents.Contains(Event->GetFName()))
+        {
+            continue;
+        }
+        if (bHasEnvironmentQueryAdapter && Event->GetOwnerClass()->GetPathName() == TEXT("/Script/AIModule.EnvQueryContext_BlueprintBase"))
         {
             continue;
         }
@@ -179,7 +395,6 @@ void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGener
         for (const TSharedPtr<FJsonValue>& ParameterValue : Parameters)
         {
             const TSharedPtr<FJsonObject> Parameter = ParameterValue->AsObject();
-            Signatures.Add(Parameter->GetStringField(TEXT("Type")) + TEXT(" ") + Parameter->GetStringField(TEXT("Name")));
             Arguments.Add(Parameter->GetStringField(TEXT("Name")));
         }
         int32 ReplacedCalls = 0;
@@ -320,6 +535,37 @@ void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGener
                 TEXT("Native event adapter '{0}::{1}' preserves the cached caller body. Direct reflected event calls outside this virtual method are not covered."),
                 {ClassName, Override.Method->GetStringField(TEXT("Name"))}));
         }
+        UBlueprintNativizationUniqueNameSubsystem* Names = GEngine->GetEngineSubsystem<UBlueprintNativizationUniqueNameSubsystem>();
+        TArray<FName> MemberNames;
+        for (UClass* Layer = Blueprint->GeneratedClass; Layer; Layer = Layer->GetSuperClass())
+        {
+            MemberNames.Append(Names->GetAllClassGlobalPropertyNames(Layer));
+            MemberNames.Append(Names->GetAllFunctionNames(Layer));
+        }
+        TMap<FString, FString> ParameterNames;
+        for (const TSharedPtr<FJsonValue>& ParameterValue : Parameters)
+        {
+            const TSharedPtr<FJsonObject> Parameter = ParameterValue->AsObject();
+            const FString OriginalName = Parameter->GetStringField(TEXT("Name"));
+            FString ParameterName = OriginalName;
+            if (MemberNames.Contains(FName(*OriginalName)))
+            {
+                FString BaseName = TEXT("NativeEvent") + OriginalName;
+                do
+                {
+                    ParameterName = Names->GetLambdaUniqueVariableName(BaseName, Blueprint->GeneratedClass,
+                        Pair.Key + TEXT(":") + OriginalName).ToString();
+                    BaseName += TEXT("Input");
+                }
+                while (Body.Contains(ParameterName) || Arguments.Contains(ParameterName));
+                ParameterNames.Add(OriginalName, ParameterName);
+            }
+            Signatures.Add(Parameter->GetStringField(TEXT("Type")) + TEXT(" ") + ParameterName);
+        }
+        if (!ParameterNames.IsEmpty())
+        {
+            Body = FGeneratedCodeCleanup::RenameGeneratedParameters(Body, ParameterNames);
+        }
         FString ConstQualifier;
         if (Override.Method->GetBoolField(TEXT("Const")))
         {
@@ -344,8 +590,14 @@ void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGener
         }
         Events.Add(Event->GetFName());
         const FString OwnerClass = UBlueprintNativizationLibrary::GetUniqueFieldName(Event->GetOwnerClass());
+        FString OwnerCondition = TEXT("Function->GetOuterUClass() == ") + OwnerClass + TEXT("::StaticClass()");
+        if (Event->GetOwnerClass()->GetPathName() == TEXT("/Script/AIModule.EnvQueryGenerator_BlueprintBase"))
+        {
+            OwnerCondition = TEXT("(") + OwnerCondition + TEXT(" || (Function->GetOuterUClass()->HasAnyClassFlags(CLASS_Native) && Function->GetSuperFunction() == ") +
+                OwnerClass + TEXT("::StaticClass()->FindFunctionByName(Function->GetFName())))");
+        }
         Dispatch += TEXT("if (Function && Function->GetFName() == FName(") + FRetainedBlueprintGeneration::Quote(Event->GetName()) +
-            TEXT(") && Function->GetOuterUClass() == ") + OwnerClass + TEXT("::StaticClass())\n{\n");
+            TEXT(") && ") + OwnerCondition + TEXT(")\n{\n");
         TArray<FString> Arguments;
         FString Output;
         FString ReturnValue;
@@ -414,4 +666,5 @@ void FNativeEventGeneration::Complete(UBlueprint* Blueprint, const TArray<FGener
     FStructTranslationResult Requirements;
     Requirements.HeaderIncludes.Add(TEXT("UObject/UnrealType.h"));
     FNativeGenerationContext::AddRequirements(Requirements);
+    CompleteEnvironmentQueryGeneratorContracts(Blueprint, Entries, Header, Source);
 }

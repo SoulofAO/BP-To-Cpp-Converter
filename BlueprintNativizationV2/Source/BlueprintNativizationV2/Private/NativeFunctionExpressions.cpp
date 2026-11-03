@@ -4,9 +4,18 @@
 #include "Internationalization/Regex.h"
 #include "UObject/UnrealType.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_GetArrayItem.h"
+#include "K2Node_Knot.h"
+#include "K2Node_MacroInstance.h"
+#include "K2Node_Tunnel.h"
+#include "EdGraphSchema_K2.h"
+#include "Kismet/KismetArrayLibrary.h"
 #include "Engine/Blueprint.h"
 #include "NativeGenerationContext.h"
 #include "Misc/ScopeExit.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "GeneratedCodeCleanup.h"
 #include "TranslatorObjects/StructTranslatorObject.h"
 
@@ -48,7 +57,7 @@ static bool UsesClassOnlyAsFilter(const TSharedPtr<FJsonObject>& Method, const F
             Remaining.RemoveAt(Guard.GetMatchBeginning(), Guard.GetMatchEnding() - Guard.GetMatchBeginning());
             Guard = FRegexMatcher(GuardPattern, Remaining);
         }
-        const FRegexPattern FilterPattern(TEXT("(?:->|\\.)\\s*(?:IsA|IsChildOf)\\s*\\(\\s*") + Name +
+        const FRegexPattern FilterPattern(TEXT("(?:->|\\.)\\s*(?:IsA|IsChildOf|ImplementsInterface)\\s*\\(\\s*(?:\\*\\s*)?") + Name +
             TEXT("\\s*(?:\\.\\s*Get\\s*\\(\\s*\\))?\\s*\\)"));
         FRegexMatcher Filter(FilterPattern, Remaining);
         while (Filter.FindNext())
@@ -66,8 +75,8 @@ static bool UsesClassOnlyAsFilter(const TSharedPtr<FJsonObject>& Method, const F
             Remaining.RemoveAt(ClassComparison.GetMatchBeginning(), ClassComparison.GetMatchEnding() - ClassComparison.GetMatchBeginning());
             ClassComparison = FRegexMatcher(ClassComparisonPattern, Remaining);
         }
-        const FRegexPattern ClassReceiverPattern(TEXT("\\b") + Name +
-            TEXT("\\s*->\\s*IsChildOf\\s*\\(\\s*\\w+::StaticClass\\s*\\(\\s*\\)\\s*\\)"));
+        const FRegexPattern ClassReceiverPattern(TEXT("(?:\\(\\s*\\*\\s*") + Name + TEXT("\\s*\\)|\\b") + Name +
+            TEXT("\\b)\\s*->\\s*IsChildOf\\s*\\(\\s*(?:\\*?\\s*\\w+|\\w+::StaticClass\\s*\\(\\s*\\))\\s*\\)"));
         FRegexMatcher ClassReceiver(ClassReceiverPattern, Remaining);
         while (ClassReceiver.FindNext())
         {
@@ -75,7 +84,39 @@ static bool UsesClassOnlyAsFilter(const TSharedPtr<FJsonObject>& Method, const F
             Remaining.RemoveAt(ClassReceiver.GetMatchBeginning(), ClassReceiver.GetMatchEnding() - ClassReceiver.GetMatchBeginning());
             ClassReceiver = FRegexMatcher(ClassReceiverPattern, Remaining);
         }
-        const FRegexPattern ForwardPattern(TEXT("\\b([A-Za-z_]\\w*)\\s*(?:<[^;{}()]+>)?\\s*\\(\\s*") + Name +
+        const FRegexPattern NullComparisonPattern(TEXT("(?:\\(\\s*\\*\\s*") + Name +
+            TEXT("\\s*\\)|\\*?\\s*\\b") + Name + TEXT("\\b)\\s*(?:==|!=)\\s*(?:nullptr|NULL)"));
+        FRegexMatcher NullComparison(NullComparisonPattern, Remaining);
+        while (NullComparison.FindNext())
+        {
+            Remaining.RemoveAt(NullComparison.GetMatchBeginning(), NullComparison.GetMatchEnding() - NullComparison.GetMatchBeginning());
+            NullComparison = FRegexMatcher(NullComparisonPattern, Remaining);
+        }
+        const FRegexPattern BooleanGuardPattern(TEXT("(?<=\\()\\s*") + Name + TEXT("\\s*&&"));
+        FRegexMatcher BooleanGuard(BooleanGuardPattern, Remaining);
+        while (BooleanGuard.FindNext())
+        {
+            Remaining.RemoveAt(BooleanGuard.GetMatchBeginning(), BooleanGuard.GetMatchEnding() - BooleanGuard.GetMatchBeginning());
+            BooleanGuard = FRegexMatcher(BooleanGuardPattern, Remaining);
+        }
+        const FRegexPattern IteratorPattern(TEXT("\\bTActorIterator\\s*<[^>]+>\\s+\\w+\\s*\\(\\s*[^,()]+,\\s*") +
+            Name + TEXT("\\s*(?=[,)])"));
+        FRegexMatcher Iterator(IteratorPattern, Remaining);
+        while (Iterator.FindNext())
+        {
+            FString IteratorSource;
+            if (!FFileHelper::LoadFileToString(IteratorSource, *(FPaths::EngineSourceDir() / TEXT("Runtime/Engine/Public/EngineUtils.h"))) ||
+                !IteratorSource.Contains(TEXT("DesiredClass(InClass)")) ||
+                !IteratorSource.Contains(TEXT("InActor->IsA(DesiredClass)")) ||
+                !IteratorSource.Contains(TEXT("Super(InWorld, InClass, InFlags)")))
+            {
+                return false;
+            }
+            bFilterEvidence = true;
+            Remaining.RemoveAt(Iterator.GetMatchBeginning(), Iterator.GetMatchEnding() - Iterator.GetMatchBeginning());
+            Iterator = FRegexMatcher(IteratorPattern, Remaining);
+        }
+        const FRegexPattern ForwardPattern(TEXT("\\b([A-Za-z_]\\w*)\\s*(?:<[^;{}()]+>)?\\s*\\(\\s*((?:[^,;{}()]+,\\s*)*)") + Name +
             TEXT("\\s*(?:\\.\\s*Get\\s*\\(\\s*\\))?\\s*(?=[,)])"));
         FRegexMatcher Forward(ForwardPattern, Remaining);
         while (Forward.FindNext())
@@ -112,7 +153,14 @@ static bool UsesClassOnlyAsFilter(const TSharedPtr<FJsonObject>& Method, const F
             {
                 return false;
             }
-            TSharedPtr<FJsonObject> Target;
+            const FString PrecedingArguments = Forward.GetCaptureGroup(2);
+            FRegexMatcher RepeatedClass(FRegexPattern(TEXT("\\b") + Name + TEXT("\\b")), PrecedingArguments);
+            if (RepeatedClass.FindNext())
+            {
+                return false;
+            }
+            const int32 ClassArgumentIndex = PrecedingArguments.Len() - PrecedingArguments.Replace(TEXT(","), TEXT("")).Len();
+            bool bFoundTarget = false;
             for (const TSharedPtr<FJsonValue>& CandidateValue : Methods)
             {
                 const TSharedPtr<FJsonObject> Candidate = CandidateValue->AsObject();
@@ -133,19 +181,19 @@ static bool UsesClassOnlyAsFilter(const TSharedPtr<FJsonObject>& Method, const F
                 {
                     continue;
                 }
-                const FString ParameterType = Parameters[0]->AsObject()->GetStringField(TEXT("Type")).Replace(TEXT(" "), TEXT(""));
+                const FString ParameterType = Parameters[ClassArgumentIndex]->AsObject()->GetStringField(TEXT("Type")).Replace(TEXT(" "), TEXT(""));
                 if (!ParameterType.Contains(TEXT("TSubclassOf<")) && !ParameterType.Contains(TEXT("UClass*")))
                 {
                     continue;
                 }
-                if (Target)
+                bFoundTarget = true;
+                if (!UsesClassOnlyAsFilter(Candidate,
+                    Parameters[ClassArgumentIndex]->AsObject()->GetStringField(TEXT("Name")), Methods, Visiting, bFilterEvidence))
                 {
                     return false;
                 }
-                Target = Candidate;
             }
-            if (!Target || !UsesClassOnlyAsFilter(Target,
-                Target->GetArrayField(TEXT("Parameters"))[0]->AsObject()->GetStringField(TEXT("Name")), Methods, Visiting, bFilterEvidence))
+            if (!bFoundTarget)
             {
                 return false;
             }
@@ -161,22 +209,262 @@ static bool UsesClassOnlyAsFilter(const TSharedPtr<FJsonObject>& Method, const F
     return true;
 }
 
-bool FNativeFunctionExpressions::IsClassFilterParameter(UFunction* Function, FName ParameterName)
+static bool UsesBlueprintClassOnlyAsFilter(UFunction* Function, FName ParameterName)
 {
-    if (!Function || !Function->HasAnyFunctionFlags(FUNC_Native) ||
-        !CastField<FClassProperty>(FindFProperty<FProperty>(Function, ParameterName)))
+    UBlueprint* Blueprint = Cast<UBlueprint>(Function->GetOwnerClass()->ClassGeneratedBy);
+    if (!Blueprint)
     {
         return false;
     }
+    static TSet<FString> VisitingFunctions;
+    const FString Identity = Function->GetPathName() + TEXT(":") + ParameterName.ToString();
+    if (VisitingFunctions.Contains(Identity))
+    {
+        return false;
+    }
+    VisitingFunctions.Add(Identity);
+    ON_SCOPE_EXIT
+    {
+        VisitingFunctions.Remove(Identity);
+    };
+    struct FClassFilterFlow
+    {
+        UEdGraphPin* Output = nullptr;
+        TArray<UK2Node_MacroInstance*> MacroStack;
+    };
+    TArray<FClassFilterFlow> Flows;
+    for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+    {
+        if (Graph->GetFName() != Function->GetFName())
+        {
+            continue;
+        }
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(Node))
+            {
+                if (UEdGraphPin* Output = Entry->FindPin(ParameterName, EGPD_Output))
+                {
+                    Flows.Add({Output, {}});
+                }
+            }
+        }
+    }
+    bool bFilterEvidence = false;
+    for (int32 FlowIndex = 0; FlowIndex < Flows.Num(); ++FlowIndex)
+    {
+        const FClassFilterFlow Flow = Flows[FlowIndex];
+        for (UEdGraphPin* Input : Flow.Output->LinkedTo)
+        {
+            UEdGraphNode* Node = Input->GetOwningNode();
+            TArray<FClassFilterFlow> NextFlows;
+            if (UK2Node_Knot* Knot = Cast<UK2Node_Knot>(Node))
+            {
+                NextFlows.Add({Knot->GetOutputPin(), Flow.MacroStack});
+            }
+            else if (UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Node))
+            {
+                UEdGraph* MacroGraph = Macro->GetMacroGraph();
+                if (!MacroGraph || Flow.MacroStack.Num() >= 64)
+                {
+                    return false;
+                }
+                TArray<UK2Node_MacroInstance*> MacroStack = Flow.MacroStack;
+                MacroStack.Add(Macro);
+                for (UEdGraphNode* MacroNode : MacroGraph->Nodes)
+                {
+                    if (MacroNode->GetClass() == UK2Node_Tunnel::StaticClass())
+                    {
+                        UK2Node_Tunnel* Tunnel = CastChecked<UK2Node_Tunnel>(MacroNode);
+                        if (UEdGraphPin* Output = Tunnel->FindPin(Input->PinName, EGPD_Output))
+                        {
+                            NextFlows.Add({Output, MacroStack});
+                        }
+                    }
+                }
+                if (NextFlows.IsEmpty())
+                {
+                    return false;
+                }
+            }
+            else if (Node->GetClass() == UK2Node_Tunnel::StaticClass() && !Flow.MacroStack.IsEmpty() &&
+                Node->GetGraph() == Flow.MacroStack.Last()->GetMacroGraph())
+            {
+                TArray<UK2Node_MacroInstance*> MacroStack = Flow.MacroStack;
+                UK2Node_MacroInstance* OwningMacro = MacroStack.Pop();
+                if (UEdGraphPin* Output = OwningMacro->FindPin(Input->PinName, EGPD_Output))
+                {
+                    NextFlows.Add({Output, MacroStack});
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            else if (UK2Node_GetArrayItem* ArrayItem = Cast<UK2Node_GetArrayItem>(Node))
+            {
+                if (Input != ArrayItem->GetTargetArrayPin())
+                {
+                    return false;
+                }
+                NextFlows.Add({ArrayItem->GetResultPin(), Flow.MacroStack});
+            }
+            else if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+            {
+                UFunction* Target = Call->GetTargetFunction();
+                if (Target && Target->GetOwnerClass() == UKismetArrayLibrary::StaticClass() &&
+                    Input->PinName == TEXT("TargetArray"))
+                {
+                    if (Target->GetFName() == GET_FUNCTION_NAME_CHECKED(UKismetArrayLibrary, Array_Get))
+                    {
+                        NextFlows.Add({Call->FindPin(TEXT("Item"), EGPD_Output), Flow.MacroStack});
+                    }
+                    else if (Target->GetFName() != GET_FUNCTION_NAME_CHECKED(UKismetArrayLibrary, Array_Length) &&
+                        Target->GetFName() != GET_FUNCTION_NAME_CHECKED(UKismetArrayLibrary, Array_IsValidIndex))
+                    {
+                        return false;
+                    }
+                }
+                else if (FNativeFunctionExpressions::IsClassFilterParameter(Target, Input->PinName))
+                {
+                    bFilterEvidence = true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+            for (const FClassFilterFlow& Next : NextFlows)
+            {
+                if (!Next.Output)
+                {
+                    return false;
+                }
+                if (!Flows.ContainsByPredicate([&](const FClassFilterFlow& Existing)
+                    { return Existing.Output == Next.Output && Existing.MacroStack == Next.MacroStack; }))
+                {
+                    Flows.Add(Next);
+                }
+            }
+        }
+    }
+    return bFilterEvidence;
+}
+
+bool FNativeFunctionExpressions::IsClassFilterParameter(UFunction* Function, FName ParameterName)
+{
+    if (!Function)
+    {
+        return false;
+    }
+    FProperty* FunctionParameter = FindFProperty<FProperty>(Function, ParameterName);
+    if (!FunctionParameter || FunctionParameter->HasAnyPropertyFlags(CPF_ReturnParm))
+    {
+        return false;
+    }
+    FProperty* Value = FunctionParameter;
+    if (FArrayProperty* Array = CastField<FArrayProperty>(Value))
+    {
+        Value = Array->Inner;
+    }
+    const FClassProperty* ClassProperty = CastField<FClassProperty>(Value);
+    if (!ClassProperty)
+    {
+        return false;
+    }
+    if (!Function->HasAnyFunctionFlags(FUNC_Native))
+    {
+        return UsesBlueprintClassOnlyAsFilter(Function, ParameterName);
+    }
+    if (FunctionParameter != Value)
+    {
+        return false;
+    }
+    if (ClassProperty->MetaClass->IsChildOf(UInterface::StaticClass()))
+    {
+        return true;
+    }
     const TSharedPtr<FJsonObject> Type = FNativeApiCatalog::FindType(Function->GetOwnerClass());
-    const TSharedPtr<FJsonObject> Method = FNativeApiCatalog::FindCallable(Function);
-    if (!Type || !Method)
+    TSharedPtr<FJsonObject> Method = FNativeApiCatalog::FindCallable(Function);
+    FString NativeParameterName = ParameterName.ToString();
+    if (!Type)
+    {
+        return false;
+    }
+    if (!Method)
+    {
+        TArray<FProperty*> ReflectedParameters;
+        for (TFieldIterator<FProperty> Parameter(Function); Parameter; ++Parameter)
+        {
+            if (Parameter->HasAnyPropertyFlags(CPF_Parm) && !Parameter->HasAnyPropertyFlags(CPF_ReturnParm))
+            {
+                ReflectedParameters.Add(*Parameter);
+            }
+        }
+        for (const TSharedPtr<FJsonValue>& CandidateValue : Type->GetArrayField(TEXT("Callables")))
+        {
+            const TSharedPtr<FJsonObject> Candidate = CandidateValue->AsObject();
+            const TArray<TSharedPtr<FJsonValue>>& Parameters = Candidate->GetArrayField(TEXT("Parameters"));
+            if (Candidate->GetStringField(TEXT("Name")) != Function->GetName() ||
+                Parameters.Num() != ReflectedParameters.Num() || !Candidate->GetBoolField(TEXT("AccessVerified")) ||
+                Candidate->GetBoolField(TEXT("Deleted")) || Candidate->GetStringField(TEXT("Body")).IsEmpty())
+            {
+                continue;
+            }
+            bool bMatches = true;
+            for (int32 ParameterIndex = 0; ParameterIndex < Parameters.Num(); ++ParameterIndex)
+            {
+                FString ExtendedType;
+                FString ReflectedType = ReflectedParameters[ParameterIndex]->GetCPPType(&ExtendedType);
+                ReflectedType += ExtendedType;
+                FString NativeType = Parameters[ParameterIndex]->AsObject()->GetStringField(TEXT("Type"));
+                for (FString* TypeName : {&ReflectedType, &NativeType})
+                {
+                    TypeName->ReplaceInline(TEXT(" "), TEXT(""));
+                    TypeName->RemoveFromStart(TEXT("const"));
+                    TypeName->RemoveFromEnd(TEXT("&"));
+                }
+                if (NativeType != ReflectedType)
+                {
+                    bMatches = false;
+                }
+            }
+            const TSharedPtr<FJsonObject>* Declaration = nullptr;
+            if (Candidate->TryGetObjectField(TEXT("Declaration"), Declaration) &&
+                !(*Declaration)->GetStringField(TEXT("Condition")).IsEmpty())
+            {
+                bMatches = false;
+            }
+            for (const TSharedPtr<FJsonValue>& Evidence : Candidate->GetArrayField(TEXT("Evidence")))
+            {
+                if (!Evidence->AsObject()->GetStringField(TEXT("Condition")).IsEmpty())
+                {
+                    bMatches = false;
+                }
+            }
+            if (!bMatches)
+            {
+                continue;
+            }
+            if (Method)
+            {
+                return false;
+            }
+            Method = Candidate;
+            NativeParameterName = Parameters[ReflectedParameters.IndexOfByKey(ClassProperty)]->AsObject()->GetStringField(TEXT("Name"));
+        }
+    }
+    if (!Method)
     {
         return false;
     }
     TSet<FString> Visiting;
     bool bFilterEvidence = false;
-    return UsesClassOnlyAsFilter(Method, ParameterName.ToString(), Type->GetArrayField(TEXT("Callables")), Visiting, bFilterEvidence) && bFilterEvidence;
+    return UsesClassOnlyAsFilter(Method, NativeParameterName, Type->GetArrayField(TEXT("Callables")), Visiting, bFilterEvidence) && bFilterEvidence;
 }
 
 FString FNativeFunctionExpressions::BehaviorTree(UFunction* Function, const FString& Arguments, UK2Node_CallFunction* Call)

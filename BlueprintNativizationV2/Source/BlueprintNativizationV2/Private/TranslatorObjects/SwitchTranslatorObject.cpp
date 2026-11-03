@@ -41,7 +41,7 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
     UEdGraphPin* DefaultPin = SwitchNode->GetDefaultPin();
     UEdGraphPin* SelectionPin = SwitchNode->GetSelectionPin();
     FString SelectionExpiration = TEXT("0");
-    
+
 	FGenerationPreparations LocalPreparations = Preparations;
 
     if (SelectionPin)
@@ -135,8 +135,7 @@ FString USwitchTranslatorObject::GenerateCodeFromNode(UK2Node* Node,
             if (bUsesPredicate)
             {
                 const FString CaseExpression = UBlueprintNativizationLibrary::GenerateOneLineDefaultConstructor(
-                    CasePin->GetName(), SwitchNode->GetInnerCaseType(), SwitchNode->GetExportTextForPin(CasePin), nullptr,
-                    NativizationV2Subsystem->LeftAllAssetRefInBlueprint);
+                    CasePin->GetName(), SwitchNode->GetInnerCaseType(), SwitchNode->GetExportTextForPin(CasePin), nullptr);
                 Condition = TEXT("!") + UBlueprintNativizationLibrary::GetUniqueFieldName(SwitchNode->FunctionClass) + TEXT("::") +
                     SwitchNode->FunctionName.ToString() + TEXT("(") + SelectionName + TEXT(", ") + CaseExpression + TEXT(")");
             }

@@ -117,12 +117,12 @@ bool UNativizationV2Subsystem::TryReapplyJSONCache(FString CacheFilePath, FStrin
     TMap<UField*, UField*> Mappings;
     TMap<UClass*, UClass*> DefaultOnlyClassReplacements;
     TMap<FString, FString> MemberNames;
-    bool bKeepAssetReferencesInBlueprint = false;
+    bool bCacheUsesBlueprintOverrides = false;
     FString DefaultsContract;
     if (!Cache->TryGetStringField(TEXT("DefaultsContract"), DefaultsContract) ||
         DefaultsContract != TEXT("SerializedBlueprintOverrides") ||
-        !Cache->TryGetBoolField(TEXT("KeepAssetReferences"), bKeepAssetReferencesInBlueprint) ||
-        !bKeepAssetReferencesInBlueprint)
+        !Cache->TryGetBoolField(TEXT("KeepAssetReferences"), bCacheUsesBlueprintOverrides) ||
+        !bCacheUsesBlueprintOverrides)
     {
         Error = TEXT("Only serialized Blueprint overrides are supported. Regenerate the migration cache with Blueprint asset references enabled.");
         return false;
@@ -289,7 +289,7 @@ bool UNativizationV2Subsystem::TryReapplyJSONCache(FString CacheFilePath, FStrin
     }
     if (bPreviewOnly)
     {
-        const bool bCanApply = ApplyMigrationTypes(Mappings, MemberNames, Error, true, DefaultOnlyClassReplacements, bContinueOnError, bKeepAssetReferencesInBlueprint, ConfigurationTemplates);
+        const bool bCanApply = ApplyMigrationTypes(Mappings, MemberNames, Error, true, DefaultOnlyClassReplacements, bContinueOnError, ConfigurationTemplates);
         if (bCanApply && Summary && !Error.IsEmpty())
         {
             *Summary += TEXT("\n\n") + Error;
@@ -301,5 +301,5 @@ bool UNativizationV2Subsystem::TryReapplyJSONCache(FString CacheFilePath, FStrin
     {
         OperationProgress(0, 0, TEXT("Applying migration changes"));
     }
-    return ApplyMigrationTypes(Mappings, MemberNames, Error, false, DefaultOnlyClassReplacements, bContinueOnError, bKeepAssetReferencesInBlueprint, ConfigurationTemplates);
+    return ApplyMigrationTypes(Mappings, MemberNames, Error, false, DefaultOnlyClassReplacements, bContinueOnError, ConfigurationTemplates);
 }

@@ -150,6 +150,9 @@ public:
 
     UPROPERTY()
     TArray<FString> CustomParametersString;
+    TArray<FString> CustomArguments;
+    FString EntryInitializationCode;
+    TArray<UK2Node*> MacroStack;
 
     bool bIsLatentContinuation = false;
       bool bRequiresReflection = false;
@@ -157,7 +160,7 @@ public:
 
     FORCEINLINE bool operator==(const FGenerateFunctionStruct& Other) const
     {
-        return Name == Other.Name && Node == Other.Node;
+        return Name == Other.Name && Node == Other.Node && MacroStack == Other.MacroStack;
     }
 };
 
@@ -358,8 +361,15 @@ struct FVisitedNodeStack
         EntryPinName = NewEntryPinName;
     }
 
+    TArray<UK2Node*> MacroStack;
+
     bool operator==(const FVisitedNodeStack& Other) const
     {
-        return Node == Other.Node && EntryPinName == Other.EntryPinName;
+        return Node == Other.Node && EntryPinName == Other.EntryPinName && MacroStack == Other.MacroStack;
     }
+};
+struct FGenerationNodeInstance
+{
+    UK2Node* Node = nullptr;
+    TArray<UK2Node*> MacroStack;
 };

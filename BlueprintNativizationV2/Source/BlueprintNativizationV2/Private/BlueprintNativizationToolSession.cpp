@@ -173,7 +173,11 @@ FString UBlueprintNativizationToolSession::GetPreparationReport(TSet<FString>* R
     FString ModuleStatus = TEXT("Not prepared");
     if (IsModuleReady(Reason))
     {
-        ModuleStatus = TEXT("Prepared (source files and registration verified; compilation not checked)");
+        ModuleStatus = TEXT("Prepared. Close the editor, build the project's Editor target and reopen the project before building API caches.");
+        if (IsPreparedModuleLoaded())
+        {
+            ModuleStatus = TEXT("Prepared; module loaded in this editor session.");
+        }
         if (ReadySections)
         {
             ReadySections->Add(TEXT("Module"));
@@ -288,7 +292,6 @@ void UBlueprintNativizationToolSession::LoadSetup()
     }
     GConfig->GetBool(Section, TEXT("MergeModule"), bMergeWithExistingModule, GEditorPerProjectIni);
     GConfig->GetBool(Section, TEXT("SaveMigrationCache"), bSaveMigrationCache, GEditorPerProjectIni);
-    GConfig->GetBool(Section, TEXT("KeepAssetReferences"), bLeaveAssetReferencesInBlueprint, GEditorPerProjectIni);
     TextGenerationMode = GetDefault<UBlueprintNativizationV2EditorSettings>()->TextGenerationMode;
     bRemoveUnrealPrefixesFromFileNames = GetDefault<UBlueprintNativizationV2EditorSettings>()->bRemoveUnrealPrefixesFromFileNames;
     GConfig->GetBool(Section, TEXT("RemoveUnrealPrefixesFromFileNames"), bRemoveUnrealPrefixesFromFileNames, GEditorPerProjectIni);
@@ -320,7 +323,7 @@ void UBlueprintNativizationToolSession::SaveSetup() const
     GConfig->SetString(Section, TEXT("MigrationCacheFolder"), *MigrationCacheFolder.Path, GEditorPerProjectIni);
     GConfig->SetBool(Section, TEXT("MergeModule"), bMergeWithExistingModule, GEditorPerProjectIni);
     GConfig->SetBool(Section, TEXT("SaveMigrationCache"), bSaveMigrationCache, GEditorPerProjectIni);
-    GConfig->SetBool(Section, TEXT("KeepAssetReferences"), bLeaveAssetReferencesInBlueprint, GEditorPerProjectIni);
+    GConfig->RemoveKey(Section, TEXT("KeepAssetReferences"), GEditorPerProjectIni);
     GConfig->SetInt(Section, TEXT("TextGenerationMode"), static_cast<int32>(TextGenerationMode), GEditorPerProjectIni);
     GConfig->SetBool(Section, TEXT("RemoveUnrealPrefixesFromFileNames"), bRemoveUnrealPrefixesFromFileNames, GEditorPerProjectIni);
     GConfig->SetBool(Section, TEXT("ReplaceDefaultOnlyChildrenWithParents"), bReplaceDefaultOnlyChildrenWithParents, GEditorPerProjectIni);
@@ -329,6 +332,11 @@ void UBlueprintNativizationToolSession::SaveSetup() const
     GConfig->SetBool(Section, TEXT("AllowExportAfterFailedGeneration"), bAllowExportAfterFailedGeneration, GEditorPerProjectIni);
     GConfig->SetInt(Section, TEXT("RepeatedConstructionThreshold"), RepeatedConstructionThreshold, GEditorPerProjectIni);
     GConfig->Flush(false, GEditorPerProjectIni);
+}
+
+bool UBlueprintNativizationToolSession::IsPreparedModuleLoaded() const
+{
+    return FModuleManager::Get().IsModuleLoaded(FName(*GetModuleName()));
 }
 
 bool UBlueprintNativizationToolSession::IsModuleReady(FString& Reason) const
@@ -663,10 +671,7 @@ bool UBlueprintNativizationToolSession::GetDependencies()
 
 bool UBlueprintNativizationToolSession::Generate()
 {
-    if (!bLeaveAssetReferencesInBlueprint)
-    {
-        return Fail(TEXT("The saved native asset defaults mode is no longer supported. Reset Setup to serialized Blueprint overrides and regenerate the export."));
-    }
+
     if (IsBusy())
     {
         return Fail(TEXT("Another conversion is running."));
@@ -746,13 +751,13 @@ bool UBlueprintNativizationToolSession::Generate()
         {
             return Fail(TEXT("Select one Blueprint and an existing function."));
         }
-        Result.NativizationCodes.Add(Subsystem->RunNativizationForOneFunctionBlueprint(Blueprint, bLeaveAssetReferencesInBlueprint, FunctionName));
+        Result.NativizationCodes.Add(Subsystem->RunNativizationForOneFunctionBlueprint(Blueprint, FunctionName));
         Result.Sucsess = !Result.NativizationCodes[0].OutputCppString.IsEmpty();
     }
     else
     {
         Result = Subsystem->RunNativizationForAllObjects(InputTargets, false, TEXT(""), true,
-            false, false, false, bLeaveAssetReferencesInBlueprint, TEXT(""), bContinueOnError);
+            false, false, false, TEXT(""), bContinueOnError);
     }
 
     TMap<FString, FString> DefaultOnlyClassReplacements = Subsystem->CaptureMigrationClassReplacements();
@@ -888,7 +893,7 @@ bool UBlueprintNativizationToolSession::Save()
         {
             CacheDirectory = OutputDirectory;
         }
-        if (!Subsystem->WriteJSONCache(CacheDirectory, GeneratedFields, GeneratedMemberNames, GeneratedDefaultOnlyClassReplacements, bLeaveAssetReferencesInBlueprint))
+        if (!Subsystem->WriteJSONCache(CacheDirectory, GeneratedFields, GeneratedMemberNames, GeneratedDefaultOnlyClassReplacements))
         {
             return Fail(TEXT("Source was saved, but the migration cache could not be written."));
         }
@@ -956,7 +961,7 @@ bool UBlueprintNativizationToolSession::PrepareModule()
     {
         return Fail(Error);
     }
-    Status = TEXT("Module prepared. Save source, close the editor and rebuild before applying a migration cache.");
+    Status = TEXT("Module prepared. Close the editor, build the project's Editor target and reopen the project before building API caches or continuing conversion.");
     bLastOperationSucceeded = true;
     return true;
 }
@@ -1004,8 +1009,8 @@ TArray<FString> UBlueprintNativizationToolSession::GetFunctionNames() const
 
 FString UBlueprintNativizationToolSession::GetInputSignature() const
 {
-    FString Signature = FString::Format(TEXT("{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}|{9}|{10}"),
-        { bGenerateOneFunction, bIncludeDependencies, bLeaveAssetReferencesInBlueprint, FunctionName,
+    FString Signature = FString::Format(TEXT("{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}|{9}"),
+        { bGenerateOneFunction, bIncludeDependencies, FunctionName,
           GetModuleName(), static_cast<int32>(TextGenerationMode), RepeatedConstructionThreshold, bRemoveUnrealPrefixesFromFileNames, bReplaceDefaultOnlyChildrenWithParents, bExcludeEngineAssetsFromConversion, bContinueOnError });
     for (UObject* Target : Targets)
     {
