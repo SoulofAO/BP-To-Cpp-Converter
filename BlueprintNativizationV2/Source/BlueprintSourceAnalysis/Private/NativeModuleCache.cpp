@@ -7,7 +7,6 @@
 #include "NativeModuleCache.h"
 #include "BlueprintNativeApiCacheLibrary.h"
 #include "DesktopPlatformModule.h"
-#include "Interfaces/IPluginManager.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -85,7 +84,7 @@ FString FNativeModuleCache::GetIdentity()
 
 FString FNativeModuleCache::GetCacheRootDirectory()
 {
-    return FPaths::ConvertRelativePathToFull(IPluginManager::Get().FindPlugin(TEXT("BlueprintNativizationV2"))->GetBaseDir() / TEXT("NativeApiCache"));
+    return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("BlueprintNativizationV2/NativeApiCache"));
 }
 
 FString FNativeModuleCache::GetConfigurationDirectory()

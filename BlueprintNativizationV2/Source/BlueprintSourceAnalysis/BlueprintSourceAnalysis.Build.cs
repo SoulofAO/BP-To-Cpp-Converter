@@ -5,7 +5,6 @@
  */
 
 using UnrealBuildTool;
-using System.IO;
 
 public class BlueprintSourceAnalysis : ModuleRules
 {
@@ -16,8 +15,6 @@ public class BlueprintSourceAnalysis : ModuleRules
         OptimizeCode = CodeOptimization.Always;
         bEnableExceptions = true;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
-        PrivateDependencyModuleNames.AddRange(new string[] { "Json", "UnrealEd", "DesktopPlatform", "Slate", "SlateCore", "Projects" });
-        PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "../../Libraries/CppSourceParser/Public"));
-        PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "../../Libraries/NativeApiCache/Public"));
+        PrivateDependencyModuleNames.AddRange(new string[] { "Json", "UnrealEd", "DesktopPlatform", "Slate", "SlateCore", "Projects", "CppSourceParser", "NativeApiCache" });
     }
 }

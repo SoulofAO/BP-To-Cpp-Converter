@@ -4,10 +4,10 @@
  * Copyright AO All Rights Reserved.
  */
 
+#include "BlueprintNativizationLibrary.h"
 #include "HAL/FileManager.h"
 #include "Internationalization/Regex.h"
 #include "Framework/Application/SlateApplication.h"
-#include "BlueprintNativizationLibrary.h"
 #include "EngineAssetPolicy.h"
 #include "GameFramework/Actor.h"
 #include "Misc/Paths.h"

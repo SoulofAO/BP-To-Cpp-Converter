@@ -76,3 +76,5 @@ DerivedDataCache/*
 BlueprintNativizationV2/Intermediate/*
 BlueprintNativizationV2/Binaries/*
 
+
+/BlueprintNativizationV2/NativeApiCache/

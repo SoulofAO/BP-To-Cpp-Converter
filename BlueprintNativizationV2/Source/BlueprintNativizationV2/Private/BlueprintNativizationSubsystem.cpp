@@ -4,10 +4,10 @@
  * Copyright AO All Rights Reserved.
  */
 
+#include "BlueprintNativizationSubsystem.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/MessageDialog.h"
-#include "BlueprintNativizationSubsystem.h"
 #include "StructInitialization.h"
 #include "EngineAssetPolicy.h"
 #include "NativeApiPreflight.h"

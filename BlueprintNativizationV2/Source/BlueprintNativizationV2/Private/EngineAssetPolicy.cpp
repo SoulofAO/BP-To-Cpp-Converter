@@ -4,8 +4,8 @@
  * Copyright AO All Rights Reserved.
  */
 
-#include "AssetRegistry/AssetData.h"
 #include "EngineAssetPolicy.h"
+#include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Blueprint/BlueprintSupport.h"
 #include "Engine/Blueprint.h"

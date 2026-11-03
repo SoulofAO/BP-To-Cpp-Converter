@@ -298,8 +298,7 @@ public:
     UPROPERTY(EditAnywhere, config, Category = "General")
     TArray<FString> GlobalVariableNames;
 
-    //The Setup Action Object is an object that links EU_NativizationTool to various helper Widgets on the Blueprint side and is best left alone.
-    UPROPERTY(EditAnywhere, config, Category = "General")
+    UPROPERTY(config, meta = (DeprecatedProperty, DeprecationMessage = "The converter uses the native Slate interface."))
     TSoftClassPtr<USetupActionObject> SetupActionObject;
 
     //ModuleName to initialize and add Code

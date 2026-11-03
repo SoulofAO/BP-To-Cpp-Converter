@@ -170,9 +170,6 @@ UBlueprintNativizationV2EditorSettings::UBlueprintNativizationV2EditorSettings()
 		"GUObjectArray",
 	};
 
-	SetupActionObject = TSoftClassPtr<USetupActionObject>(
-		FSoftClassPath(TEXT("/BlueprintNativizationV2/BP_MainSetupActionObject.BP_MainSetupActionObject_C"))
-	);
 
 
 

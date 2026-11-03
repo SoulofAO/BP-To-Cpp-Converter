@@ -3,19 +3,35 @@
     "Version": 1,
     "VersionName": "0.4.0",
     "FriendlyName": "BlueprintNativizationV2",
-    "Description": "BP To CPP Converter is the only plugin, that implements seamless translation of Blueprint into readable C++",
+    "Description": "Generates C++ source from supported Blueprint assets, with preview, export and migration tools.",
     "Category": "Other",
     "CreatedBy": "AO",
     "CreatedByURL": "https://github.com/SoulofAO",
-    "DocsURL": "https://docs.google.com/document/d/1hapXKHpW66YhH5ISvy9DdWMQ8hYPFE_2dKt2b3KvR88/edit?usp=sharing",
-    "MarketplaceURL": "",
+    "DocsURL": "https://github.com/SoulofAO/BP-To-Cpp-Converter/blob/main/BlueprintNativizationV2/Documentation/UserGuide.md",
+    "MarketplaceURL": "com.epicgames.launcher://ue/Fab/product/0cc6dffd-a119-4cad-9753-6d9e6fb5a848",
     "SupportURL": "https://github.com/SoulofAO",
     "EngineVersion": "5.8.0",
-    "CanContainContent": true,
+    "CanContainContent": false,
     "IsBetaVersion": false,
     "IsExperimentalVersion": false,
     "Installed": false,
     "Modules": [
+        {
+            "Name": "CppSourceParser",
+            "Type": "Editor",
+            "LoadingPhase": "Default",
+            "PlatformAllowList": [
+                "Win64"
+            ]
+        },
+        {
+            "Name": "NativeApiCache",
+            "Type": "Editor",
+            "LoadingPhase": "Default",
+            "PlatformAllowList": [
+                "Win64"
+            ]
+        },
         {
             "Name": "BlueprintSourceAnalysis",
             "Type": "Editor",
