@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "TranslatorObjects/CallFunctionTranslatorObject.h"
 #include "BlueprintNativizationLibrary.h"
 #include "Kismet/KismetArrayLibrary.h"

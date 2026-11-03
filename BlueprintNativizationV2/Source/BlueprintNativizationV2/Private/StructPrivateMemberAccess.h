@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #pragma once
 
 // Explicit instantiation permits obtaining a member without changing its declaring class.

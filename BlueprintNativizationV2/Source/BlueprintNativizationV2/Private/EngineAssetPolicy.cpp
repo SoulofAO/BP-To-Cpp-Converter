@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "AssetRegistry/AssetData.h"
 #include "EngineAssetPolicy.h"
 #include "AssetRegistry/AssetRegistryModule.h"

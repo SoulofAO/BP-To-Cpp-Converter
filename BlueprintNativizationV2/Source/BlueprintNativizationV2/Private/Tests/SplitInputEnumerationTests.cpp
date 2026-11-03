@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #if WITH_DEV_AUTOMATION_TESTS
 #include "BlueprintNativizationSubsystem.h"
 #include "EdGraphSchema_K2.h"

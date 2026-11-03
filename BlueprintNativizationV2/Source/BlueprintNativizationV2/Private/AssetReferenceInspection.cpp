@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "BlueprintNativizationLibrary.h"
 #include "Engine/Blueprint.h"
 #include "StructUtils/InstancedStruct.h"

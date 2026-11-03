@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "BlueprintPropertyBindingMigration.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectHash.h"

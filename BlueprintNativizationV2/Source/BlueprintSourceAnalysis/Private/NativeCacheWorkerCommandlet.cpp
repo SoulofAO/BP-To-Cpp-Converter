@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "NativeCacheWorkerCommandlet.h"
 #include "NativeModuleCache.h"
 #include "HAL/PlatformProcess.h"

@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "NativeCacheTask.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/FileManager.h"

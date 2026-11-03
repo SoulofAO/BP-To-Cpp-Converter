@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "TranslatorObjects/CreateTranslators/CreateWidgetTranslatorObject.h"
 #include "CreationNodeTranslation.h"
 #include "BlueprintNativizationSubsystem.h"

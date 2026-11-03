@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "NativeApiCatalog.h"
 #include "BlueprintNativeApiCacheLibrary.h"
 #include "HAL/FileManager.h"

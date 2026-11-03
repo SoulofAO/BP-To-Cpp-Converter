@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "BlueprintNativizationUniqueNameSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
 #include "EdGraph/EdGraph.h"

@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "Misc/PackageName.h"
 #include "TranslatorObjects/CallFunctionTranslatorObject.h"
 #include "Kismet/KismetMathLibrary.h"

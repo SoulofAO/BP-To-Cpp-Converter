@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "Misc/FeedbackContext.h"
 #include "Dom/JsonObject.h"
 #include "BlueprintNativizationSubsystem.h"

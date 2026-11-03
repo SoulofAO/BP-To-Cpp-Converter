@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "StructInitialization.h"
 #include "Misc/DefaultValueHelper.h"
 #include "Misc/PackageName.h"

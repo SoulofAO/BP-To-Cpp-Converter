@@ -1,3 +1,9 @@
+/*
+ * Publisher: AO
+ * Year of Publication: 2026
+ * Copyright AO All Rights Reserved.
+ */
+
 #include "TranslatorObjects/ContainerLoopTranslatorObject.h"
 #include "BlueprintNativizationSubsystem.h"
 #include "BlueprintNativizationLibrary.h"
