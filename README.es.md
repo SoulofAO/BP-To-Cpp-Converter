@@ -4,6 +4,8 @@ Genera código fuente C++ a partir de clases Blueprint, interfaces, estructuras 
 
 Requiere Unreal Engine 5.8, Windows x64 y un entorno de compilación C++ configurado. Es un plugin del editor; el código de juego generado pertenece a un módulo independiente del proyecto.
 
+**Dependencias obligatorias:** EnhancedInput, ControlRig y Niagara, incluidos en Unreal Engine, deben permanecer activados. SemanticSearch es opcional y está desactivado de forma predeterminada.
+
 [Guía completa en inglés](BlueprintNativizationV2/Documentation/UserGuide.md) | [English](README.md) | [Русский](README.ru.md) | [中文](README.zh.md)
 
 ## Instalación y uso

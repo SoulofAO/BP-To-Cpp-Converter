@@ -4,6 +4,8 @@ BP to CPP Converter generates C++ source from supported Unreal Engine Blueprint 
 
 Requires Unreal Engine 5.8, Windows x64 and a configured C++ build environment. The converter is an Editor plugin; generated gameplay code belongs to a separate project module.
 
+**Required dependencies:** EnhancedInput, ControlRig and Niagara, included with Unreal Engine. These plugins must remain enabled. SemanticSearch is optional and disabled by default.
+
 [User guide](BlueprintNativizationV2/Documentation/UserGuide.md) | [Русский](README.ru.md) | [Español](README.es.md) | [中文](README.zh.md)
 
 ## Installation

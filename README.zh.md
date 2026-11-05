@@ -4,6 +4,8 @@
 
 要求：Unreal Engine 5.8、Windows x64，以及已配置的 C++ 编译器和 Windows SDK。转换器是编辑器插件，生成的游戏代码位于独立的项目模块中。
 
+**必需依赖项：** EnhancedInput、ControlRig 和 Niagara 随 Unreal Engine 提供，必须保持启用。SemanticSearch 为可选插件，默认禁用。
+
 [完整英文指南](BlueprintNativizationV2/Documentation/UserGuide.md) | [English](README.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 ## 安装与使用

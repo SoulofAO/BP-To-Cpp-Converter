@@ -4,6 +4,8 @@
 
 Требования: Unreal Engine 5.8, Windows x64, настроенный компилятор C++ и Windows SDK. Плагин работает в редакторе; игровой код создаётся в отдельном модуле проекта.
 
+**Обязательные зависимости:** EnhancedInput, ControlRig и Niagara входят в Unreal Engine и должны быть включены. SemanticSearch необязателен и по умолчанию отключён.
+
 [Руководство на английском](BlueprintNativizationV2/Documentation/UserGuide.md) | [English](README.md) | [Español](README.es.md) | [中文](README.zh.md)
 
 ## Установка

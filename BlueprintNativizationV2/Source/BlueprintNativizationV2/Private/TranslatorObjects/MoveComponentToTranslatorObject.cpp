@@ -2,7 +2,7 @@
 /*
  * Publisher: AO
  * Year of Publication: 2025
- * Copyright AO All Rights Reserved.
+ * Copyright 2025 AO All Rights Reserved.
  */
 
 #include "TranslatorObjects/MoveComponentToTranslatorObject.h"

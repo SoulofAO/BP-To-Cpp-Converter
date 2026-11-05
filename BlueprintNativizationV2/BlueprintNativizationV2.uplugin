@@ -3,7 +3,7 @@
     "Version": 1,
     "VersionName": "0.4.0",
     "FriendlyName": "BlueprintNativizationV2",
-    "Description": "Generates C++ source from supported Blueprint assets, with preview, export and migration tools.",
+    "Description": "Generates C++ source from supported Blueprint assets, with preview, export and migration tools. Required dependencies: EnhancedInput, ControlRig and Niagara (included with Unreal Engine). SemanticSearch is optional and disabled by default.",
     "Category": "Other",
     "CreatedBy": "AO",
     "CreatedByURL": "https://github.com/SoulofAO",

@@ -1,7 +1,7 @@
 /*
  * Publisher: AO
  * Year of Publication: 2026
- * Copyright AO All Rights Reserved.
+ * Copyright 2026 AO All Rights Reserved.
  */
 
 #include "TranslatorObjects/EnumLoopTranslatorObject.h"
